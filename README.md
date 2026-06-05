@@ -3,10 +3,14 @@
 **As taxas médias de juros do Banco Central, prontas para o perito — sem caçar
 código de série no SGS.**
 
-Ferramenta para **peritos bancários, peritos trabalhistas, contadores e
-advogados** que precisam dos números oficiais do Banco Central do Brasil para
-revisão de contratos, liquidação de sentença, superendividamento e perícia
-financeira em geral.
+Ferramenta para **todo perito e assistente técnico** que precisa dos números
+oficiais do Banco Central do Brasil — perito **bancário, trabalhista,
+tributário, previdenciário, financeiro e contábil**, atuando como **perito
+judicial ou assistente técnico**, além de **advogados e contadores**.
+
+Serve a revisão de contratos, liquidação de sentença, superendividamento,
+atualização de débitos e benefícios, correção monetária e perícia financeira em
+geral — em qualquer área, é a mesma fonte oficial (BCB) que sustenta o cálculo.
 
 Autor e curadoria: **Edilson Aguiais** — advogado (OAB-GO 59.889), contador
 (CRC-GO 27.798), economista (CORECON-GO 2.337/D), professor e perito.
@@ -15,9 +19,10 @@ Autor e curadoria: **Edilson Aguiais** — advogado (OAB-GO 59.889), contador
 
 ## Por que isso importa para o perito
 
-Na perícia bancária e trabalhista, o erro mais comum — inclusive de quem tenta
-usar IA sem critério — é **trabalhar com a taxa pactuada/divulgada pela própria
-instituição financeira**. Essa não é a referência correta.
+Em perícia financeira — bancária, trabalhista, tributária, previdenciária —, o
+erro mais comum, inclusive de quem tenta usar IA sem critério, é **trabalhar com
+a taxa pactuada/divulgada pela própria instituição financeira**. Essa não é a
+referência correta.
 
 A referência é a **taxa MÉDIA de juros praticada pelo mercado**, por
 modalidade, que o **Banco Central apura e divulga oficialmente** no SGS (Sistema
@@ -100,7 +105,7 @@ catalogo.buscar("consignado")
 catalogo.listar("juros_pf")    # juros_pf | juros_pj | juros_geral | indices_macro
 ```
 
-### Inadimplência por estado/região (útil em perícia trabalhista e bancária)
+### Inadimplência por estado/região
 
 ```python
 from sgs_peritos.regional_economy import get_non_performing_loans
