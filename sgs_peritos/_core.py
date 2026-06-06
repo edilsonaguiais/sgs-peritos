@@ -35,8 +35,8 @@ from typing import (
 
 import pandas as pd
 
-from .http import _CLIENT, _ASYNC_CLIENT
-from .exceptions import BCBRateLimitError, SGSError
+from .http import _CLIENT, _ASYNC_CLIENT, with_retry
+from .exceptions import BCBRateLimitError, SGSError, SGSTransientError
 from .utils import Date, DateInput
 
 logger = logging.getLogger(__name__)
@@ -222,68 +222,106 @@ def get(
             return dfs
 
 
+def _parse_sgs_response(code: int, status_code: int, text: str) -> str:
+    """Valida a resposta do SGS e devolve o JSON bruto (texto).
+
+    Trata os casos em que o BCB "responde" mas de forma invalida — em
+    especial a pagina de WAF/proxy devolvida com ``status 200`` e corpo
+    HTML, e o erro interno (``5xx``) que tambem vem com ``status 200`` e
+    ``{"erro": {"statusCode": 5xx}}`` no corpo. Esses casos viram
+    :class:`SGSTransientError` para que o cliente faca retry.
+
+    Raises
+    ------
+    BCBRateLimitError
+        Status 429 (limite de requisicoes).
+    SGSTransientError
+        Falha transitoria (WAF, 5xx, corpo nao-JSON) — vale tentar de novo.
+    SGSError
+        Erro definitivo do SGS (ex.: serie inexistente).
+    """
+    if status_code == 429:
+        raise BCBRateLimitError(
+            "Limite de requisicoes da API do BCB excedido. Tente novamente mais tarde.",
+            status_code=429,
+        )
+
+    if status_code >= 500:
+        raise SGSTransientError(
+            f"BCB indisponivel (HTTP {status_code}) ao baixar codigo = {code}."
+        )
+
+    stripped = text.lstrip()
+
+    # Pagina de WAF/proxy: corpo HTML/XML ("Requisicao invalida!") com
+    # status 200. Nao e JSON e tende a se resolver sozinha — retry.
+    if stripped.startswith("<"):
+        raise SGSTransientError(
+            f"BCB rejeitou a requisicao (pagina de WAF/HTML em vez de JSON) "
+            f"para o codigo = {code}. Servico instavel; tente de novo."
+        )
+
+    try:
+        res_json = json.loads(text)
+    except json.JSONDecodeError:
+        if status_code != 200:
+            raise SGSError(f"Erro ao baixar: codigo = {code} (HTTP {status_code})")
+        raise SGSTransientError(
+            f"Resposta nao-JSON do BCB para o codigo = {code}. "
+            f"Servico instavel; tente de novo."
+        )
+
+    # O BCB devolve erros como objeto JSON ({"erro": ...} / {"error": ...}),
+    # as vezes ate com status 200. Um 5xx embutido e transitorio.
+    if isinstance(res_json, dict):
+        err = res_json.get("erro") or res_json.get("error")
+        if err is not None:
+            detail = err.get("detail", err) if isinstance(err, dict) else err
+            inner_status = err.get("statusCode") if isinstance(err, dict) else None
+            if (inner_status and int(inner_status) >= 500) or status_code >= 500:
+                raise SGSTransientError(
+                    f"Erro interno do BCB ao baixar codigo = {code}: {detail}"
+                )
+            raise SGSError(f"Erro do BCB (codigo = {code}): {detail}")
+
+    if status_code != 200:
+        raise SGSError(f"Erro ao baixar: codigo = {code} (HTTP {status_code})")
+
+    return str(text)
+
+
+@with_retry
 def get_json(
     code: int,
     start: Optional[DateInput] = None,
     end: Optional[DateInput] = None,
     last: int = 0,
 ) -> str:
-    """Retorna o JSON bruto de uma serie temporal do SGS."""
+    """Retorna o JSON bruto de uma serie temporal do SGS.
+
+    Faz retry automatico com backoff em falhas transitorias do BCB
+    (timeouts, 5xx, pagina de WAF, rate limit).
+    """
     url, payload = _get_url_and_payload(code, start, end, last)
     logger.debug(f"Baixando serie SGS code={code} de {url.split('/dados')[0]}")
     res = _CLIENT.get(url, params=payload)
     logger.debug(f"Resposta SGS: status={res.status_code}, length={len(res.text)}")
-
-    if res.status_code == 429:
-        raise BCBRateLimitError(
-            "Limite de requisicoes da API do BCB excedido. Tente novamente mais tarde.",
-            status_code=429,
-        )
-
-    if res.status_code != 200:
-        try:
-            res_json = json.loads(res.text)
-        except json.JSONDecodeError:
-            res_json = {}
-
-        if "error" in res_json:
-            raise SGSError(f"Erro do BCB: {res_json['error']}")
-        elif "erro" in res_json:
-            raise SGSError(f"Erro do BCB: {res_json['erro']['detail']}")
-        raise SGSError(f"Erro ao baixar: codigo = {code}")
-    return str(res.text)
+    return _parse_sgs_response(code, res.status_code, res.text)
 
 
+@with_retry
 async def async_get_json(
     code: int,
     start: Optional[DateInput] = None,
     end: Optional[DateInput] = None,
     last: int = 0,
 ) -> str:
-    """Versao assincrona de :func:`get_json`."""
+    """Versao assincrona de :func:`get_json` (com o mesmo retry)."""
     url, payload = _get_url_and_payload(code, start, end, last)
     logger.debug(f"Baixando serie SGS (async) code={code} de {url.split('/dados')[0]}")
     res = await _ASYNC_CLIENT.get(url, params=payload)
     logger.debug(f"Resposta SGS (async): status={res.status_code}, length={len(res.text)}")
-
-    if res.status_code == 429:
-        raise BCBRateLimitError(
-            "Limite de requisicoes da API do BCB excedido. Tente novamente mais tarde.",
-            status_code=429,
-        )
-
-    if res.status_code != 200:
-        try:
-            res_json = json.loads(res.text)
-        except json.JSONDecodeError:
-            res_json = {}
-
-        if "error" in res_json:
-            raise SGSError(f"Erro do BCB: {res_json['error']}")
-        elif "erro" in res_json:
-            raise SGSError(f"Erro do BCB: {res_json['erro']['detail']}")
-        raise SGSError(f"Erro ao baixar: codigo = {code}")
-    return str(res.text)
+    return _parse_sgs_response(code, res.status_code, res.text)
 
 
 async def async_get(

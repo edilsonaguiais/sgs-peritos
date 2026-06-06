@@ -26,7 +26,13 @@ from ._core import (
     async_get,
     async_get_json,
 )
-from .exceptions import BCBError, BCBAPIError, BCBRateLimitError, SGSError
+from .exceptions import (
+    BCBError,
+    BCBAPIError,
+    BCBRateLimitError,
+    SGSError,
+    SGSTransientError,
+)
 from .utils import BRAZILIAN_REGIONS, BRAZILIAN_STATES, Date
 from . import catalogo
 from . import regional_economy
@@ -43,6 +49,7 @@ __all__ = [
     "BCBAPIError",
     "BCBRateLimitError",
     "SGSError",
+    "SGSTransientError",
     "BRAZILIAN_REGIONS",
     "BRAZILIAN_STATES",
     "Date",

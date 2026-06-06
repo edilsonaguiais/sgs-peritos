@@ -13,8 +13,20 @@ from typing import Callable, TypeVar
 import httpx
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
+)
+
+from .exceptions import BCBRateLimitError, SGSTransientError
+
+# Excecoes que justificam nova tentativa (falhas transitorias):
+# erros de transporte/timeout do httpx, respostas instaveis/invalidas do SGS
+# (pagina de WAF, 5xx, corpo nao-JSON) e estouro de limite de requisicoes.
+RETRYABLE_EXCEPTIONS = (
+    httpx.TransportError,
+    SGSTransientError,
+    BCBRateLimitError,
 )
 
 # Timeout padrao de todas as requisicoes HTTP (segundos)
@@ -34,10 +46,11 @@ _ASYNC_CLIENT = httpx.AsyncClient(
 
 
 # Decorador de retry para falhas transitorias
-# (erros de conexao, timeouts, HTTP 5xx, etc.)
+# (erros de conexao, timeouts, HTTP 5xx, pagina de WAF, rate limit, etc.)
 _retry_decorator = retry(
     stop=stop_after_attempt(4),  # 1 inicial + 3 retries = 4 tentativas
     wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
     reraise=True,
 )
 
