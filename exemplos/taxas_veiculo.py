@@ -42,10 +42,10 @@ def main() -> None:
     args = parser.parse_args()
 
     codigos = {
-        "PF_anual": catalogo.codigo("veiculo_pf_anual"),
-        "PF_mensal": catalogo.codigo("veiculo_pf_mensal"),
-        "PJ_anual": catalogo.codigo("veiculo_pj_anual"),
-        "PJ_mensal": catalogo.codigo("veiculo_pj_mensal"),
+        "PF_anual": catalogo.codigo("pf_veiculos_anual"),
+        "PF_mensal": catalogo.codigo("pf_veiculos_mensal"),
+        "PJ_anual": catalogo.codigo("pj_veiculos_anual"),
+        "PJ_mensal": catalogo.codigo("pj_veiculos_mensal"),
     }
 
     print("[SGS] Baixando series de financiamento de veiculo (PF e PJ)...")
