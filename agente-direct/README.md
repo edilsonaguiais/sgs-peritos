@@ -26,7 +26,9 @@ Lead manda DM ──► Meta (webhook) ──► /webhook deste servidor
   mudar o que o agente fala, edite esses arquivos e reinicie. Não precisa mexer em código.
 - **Você assume quando quiser.** Se você responder um lead pelo app do Instagram, o
   agente percebe e sai daquela conversa por 24 h (`PAUSA_HUMANO_HORAS`).
-- **Transferência para humano.** Quando o lead está pronto para fechar, pede desconto,
+- **O próprio agente fecha.** Com interesse, ele manda preço + link da EduQ + uma
+  pergunta, como no método Damásio. Não segura o link nem força call.
+- **Transferência para humano.** Quando o lead pede desconto ou a garantia do Águias,
   quer falar com você, é aluno com problema, ou pergunta algo que não está em
   `produtos.md`, o agente faz a ponte, para de responder e avisa em `NOTIFICAR_URL`
   (Make, Zapier, n8n ou Slack).
@@ -36,17 +38,48 @@ Lead manda DM ──► Meta (webhook) ──► /webhook deste servidor
 - **Honestidade.** Se perguntarem se é robô, ele não nega: diz que é o assistente do
   Edilson e oferece chamar alguém.
 
-## Antes de ligar: complete `conhecimento/produtos.md`
+## De onde vêm preço, links e regras
 
-Tirei preço, público e formato da Águias e da AutorIA 10X dos documentos do seu Drive.
-Ficaram marcados com **[PREENCHER]**:
+`conhecimento/produtos.md` foi montado a partir dos repositórios de vendas
+(`mentoria-aguias-one/vendas`, `mentoria-aguias-da-pericia/vendas`,
+`unibcappa-produtos/mentoria/02-autoria-10x`), que espelham o Dropbox. Os dados
+vigentes em 14/10/2026 são estes:
 
-- **Águias One**: não há nenhum documento sobre ela no Drive. Falta tudo: promessa,
-  público, formato, preço e link.
-- **AutorIA 10X**: falta o preço e o link de compra.
-- **Águias da Perícia**: falta o link de aplicação ou de pagamento.
+| Produto | Preço no direct (fora do evento) | Matrícula EduQ |
+|---|---|---|
+| Águias ONE | 12x R$ 1.500 ou R$ 15.000 | https://go.eduq.tec.br/r/8df263aed54d460 (processo 232) |
+| Águias da Perícia | 12x R$ 4.000 ou R$ 45.000 | https://go.eduq.tec.br/r/8df26455d32e839 (processo 237) |
+| AutorIA 10X Autor Digital | R$ 2.996,40 | https://inscricao.eduqtecnologia.com.br/detalhes/218?dominio=ibcappa |
+| AutorIA 10X Legado Profissional | R$ 5.964,00 | https://inscricao.eduqtecnologia.com.br/detalhes/219?dominio=ibcappa |
+| AutorIA 10X Autoridade Black | R$ 17.964,00 (passa pelo time) | https://inscricao.eduqtecnologia.com.br/detalhes/220?dominio=ibcappa |
 
-Enquanto um dado estiver como [PREENCHER], o agente não o cita e transfere para o time.
+O agente também segue as regras dos playbooks: método Damásio (com interesse, manda
+preço + link + uma pergunta), preço do III Encontro nunca no direct, parcelado
+primeiro, sem desconto, "mentoria que certifica como pós-graduação" (nunca "é uma
+pós", nunca "MEC"), garantia do Águias bloqueada até conferir o contrato.
+
+**Quando o preço ou o link mudar, mude `produtos.md` e reinicie.** O agente só
+consegue enviar links que estão nesse arquivo. Qualquer outro link, inclusive os de
+preço de evento, é bloqueado antes de sair, e a conversa vai para o time.
+
+## Freios
+
+| Freio | Variável | Padrão |
+|---|---|---|
+| Agrupa mensagens quebradas do lead | `ESPERA_AGRUPAR_S` | 8 s |
+| Sai da conversa quando você responde pelo app | `PAUSA_HUMANO_HORAS` | 24 h |
+| Teto de mensagens do agente por conversa em 24 h (no teto, passa para o time) | `MAX_MSGS_SESSAO` | 15 |
+| Pessoas que o agente nunca atende (sócios, família, equipe) | `BLOQUEADOS` | vazio |
+| Fase de teste: só atende estes @ | `SANDBOX` | vazio (todos) |
+| Um follow-up (copy do `/sumiu1`) se o lead sumir, dentro da janela de 24 h, entre 8h e 21h | `FOLLOWUP_APOS_H` | 20 h |
+| Sem travessão e sem link fora da lista | (sempre ligado) | |
+
+O Instagram só entrega mensagem até 24 h depois da última fala do lead. Por isso o
+`/sumiu2` do playbook (dia 3) não existe no direct: o agente faz um único toque.
+
+> **Atenção, Sofia:** a Sofia (SellFlux, política 40838) já vende o ONE. Se ela
+> estiver ligada ao mesmo Instagram, desligue um dos dois nesse canal. Dois agentes
+> na mesma caixa respondem em dobro.
 
 ## Passo a passo da conexão oficial
 
@@ -87,8 +120,10 @@ No painel do app, em **Configurar webhooks**:
 
 ### 5. Teste em modo desenvolvimento
 Com o app em modo desenvolvimento, o agente só responde contas que têm função no app
-(*Funções do app → Testadores do Instagram*). Mande uma DM de uma conta testadora e
-acompanhe o log. Para testar sem enviar nada de verdade, use `MODO_TESTE=1`.
+(*Funções do app → Testadores do Instagram*). Coloque essas contas em `SANDBOX`, mande
+uma DM e acompanhe o log. Para testar sem enviar nada de verdade, use `MODO_TESTE=1`.
+Antes de abrir para todos, leia 10 conversas de teste e só libere se você assinaria
+todas as respostas.
 
 ### 6. Liberar para todos os leads (App Review)
 Para atender qualquer pessoa, a Meta exige:

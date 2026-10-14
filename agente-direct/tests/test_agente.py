@@ -163,7 +163,7 @@ def test_dividir_respeita_limite_de_bytes():
 
 def test_prompt_inclui_os_tres_documentos():
     sistema = montar_sistema(RAIZ / "conhecimento")
-    for marca in ("<tom_de_voz>", "<produtos>", "<metodo_bant>", "Águias One", "AutorIA 10X"):
+    for marca in ("<tom_de_voz>", "<produtos>", "<metodo_bant>", "ÁGUIAS ONE", "AutorIA 10X", "8df263aed54d460"):
         assert marca in sistema
 
 
@@ -178,3 +178,132 @@ def _sem_propriedades_soltas(no):
 
 def test_esquema_valido_para_saida_estruturada():
     _sem_propriedades_soltas(ESQUEMA_RESPOSTA)
+
+
+# --- salvaguardas novas ----------------------------------------------------
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import httpx2
+
+from agente_direct.app import texto_followup
+from agente_direct.cerebro import Cerebro, limpar, links_permitidos
+
+
+def _resposta_claude(mensagens, **extra):
+    corpo = {"mensagens": mensagens,
+             "bant": {k: {"status": "desconhecido", "evidencia": ""} for k in ("budget", "authority", "need", "timing")},
+             "perfil": "", "produto_recomendado": "aguias_one", "estagio": "apresentacao",
+             "transferir_para_humano": False, "motivo_transferencia": "", "resumo_lead": "",
+             "dor_resumida": "", **extra}
+
+    def handler(request):
+        return httpx2.Response(200, json={
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": json.dumps(corpo)}], "stop_reason": "end_turn",
+            "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}})
+    import anthropic
+    return anthropic.AsyncAnthropic(api_key="x", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
+
+
+def test_links_oficiais_estao_na_lista_permitida():
+    links = links_permitidos(RAIZ / "conhecimento")
+    assert "https://go.eduq.tec.br/r/8df263aed54d460" in links      # ONE fora do evento
+    assert "https://go.eduq.tec.br/r/8df26455d32e839" in links      # Águias fora do evento
+    assert "https://inscricao.eduqtecnologia.com.br/detalhes/218?dominio=ibcappa" in links
+    assert "https://go.eduq.tec.br/r/8df2639b988a75a" not in links  # ONE preço de evento
+    assert "https://go.eduq.tec.br/r/8df26454b4d6cdc" not in links  # Águias preço de evento
+
+
+def test_link_nao_autorizado_e_bloqueado_e_transfere():
+    links = links_permitidos(RAIZ / "conhecimento")
+    cliente = _resposta_claude(["Segue o link: https://go.eduq.tec.br/r/8df2639b988a75a"])
+    cerebro = Cerebro("sistema", cliente=cliente, links=links)
+    d = asyncio.run(cerebro.decidir([{"role": "user", "content": "quero o link"}]))
+    assert d.mensagens == [] and d.transferir
+
+
+def test_link_oficial_passa_mesmo_com_pontuacao():
+    links = links_permitidos(RAIZ / "conhecimento")
+    texto = "São 12x de R$ 1.500. Matrícula: https://go.eduq.tec.br/r/8df263aed54d460. Faz sentido para você?"
+    cerebro = Cerebro("sistema", cliente=_resposta_claude([texto]), links=links)
+    d = asyncio.run(cerebro.decidir([{"role": "user", "content": "quanto custa?"}]))
+    assert d.mensagens == [texto] and not d.transferir
+
+
+def test_tira_travessao():
+    assert limpar("Não é sobre laudo — é sobre negócio") == "Não é sobre laudo, é sobre negócio"
+
+
+def test_bloqueados_e_sandbox():
+    async def cenario(cfg_extra):
+        cfg, orq, enviados = montar()
+        orq.cfg = Config(**{**cfg.__dict__, **cfg_extra})
+        for ev in extrair_eventos(payload("oi", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return enviados
+
+    assert asyncio.run(cenario({"bloqueados": frozenset({"dra.carla"})})) == []
+    assert asyncio.run(cenario({"sandbox": frozenset({"outra.pessoa"})})) == []
+    assert len(asyncio.run(cenario({"sandbox": frozenset({"dra.carla"})}))) == 1
+
+
+def test_teto_de_mensagens_passa_para_humano():
+    async def cenario():
+        cfg, orq, enviados = montar()
+        orq.cfg = Config(**{**cfg.__dict__, "max_msgs_sessao": 1})
+        for i in range(2):
+            for ev in extrair_eventos(payload(f"msg {i}", f"m{i}"), CONTA):
+                orq.receber(ev)
+            await asyncio.sleep(0.2)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert len(enviados) == 1
+    assert orq.memoria.lead(LEAD)["transferido"] == 1
+
+
+def test_followup_um_unico_toque_dentro_da_janela():
+    fuso = ZoneInfo("America/Sao_Paulo")
+    t_lead = datetime(2026, 10, 14, 14, 0, tzinfo=fuso).timestamp()   # lead falou às 14h
+
+    async def cenario():
+        _, orq, enviados = montar()
+        for ev in extrair_eventos(payload("quero saber do ONE", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        orq.memoria._db.execute("UPDATE mensagens SET criado_em = ? WHERE papel = 'user'", (t_lead,))
+        orq.memoria._db.execute("UPDATE mensagens SET criado_em = ? WHERE papel = 'assistant'", (t_lead + 60,))
+        orq.memoria.atualizar_lead(LEAD, ficha={"produto_recomendado": "aguias_one", "estagio": "apresentacao",
+                                                "dor_resumida": "conseguir clientes sem indicação"})
+        cedo = await orq.verificar_followups(t_lead + 5 * 3600)        # 19h, cedo demais
+        primeiro = await orq.verificar_followups(t_lead + 21 * 3600)   # 11h do dia seguinte
+        segundo = await orq.verificar_followups(t_lead + 21.2 * 3600)  # já mandou, não repete
+        fora = await orq.verificar_followups(t_lead + 30 * 3600)       # janela de 24 h fechada
+        return cedo, primeiro, segundo, fora, enviados
+
+    cedo, primeiro, segundo, fora, enviados = asyncio.run(cenario())
+    assert (cedo, primeiro, segundo, fora) == (0, 1, 0, 0)
+    assert enviados[-1] == ("Carla, retomo nossa conversa sobre conseguir clientes sem indicação. "
+                            "Ficou algum ponto sem resposta para você decidir?")
+
+
+def test_followup_respeita_silencio_noturno():
+    fuso = ZoneInfo("America/Sao_Paulo")
+    t_lead = datetime(2026, 10, 14, 5, 0, tzinfo=fuso).timestamp()    # 20 h depois = 1h da manhã
+
+    async def cenario():
+        _, orq, _ = montar()
+        for ev in extrair_eventos(payload("oi", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        orq.memoria._db.execute("UPDATE mensagens SET criado_em = ?", (t_lead,))
+        orq.memoria.atualizar_lead(LEAD, ficha={"produto_recomendado": "aguias_one", "estagio": "apresentacao"})
+        return await orq.verificar_followups(t_lead + 20.5 * 3600)
+
+    assert asyncio.run(cenario()) == 0
+
+
+def test_texto_followup_sem_nome_e_sem_dor():
+    assert texto_followup(None, "") == "Retomo nossa conversa. Ficou algum ponto sem resposta para você decidir?"

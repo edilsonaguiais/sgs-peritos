@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS leads (
     ficha TEXT,                     -- JSON com BANT, produto, estágio, resumo
     pausado_ate REAL DEFAULT 0,
     transferido INTEGER DEFAULT 0,
+    followup_em REAL DEFAULT 0,     -- quando o agente mandou o follow-up
     atualizado_em REAL
 );
 
@@ -101,7 +102,7 @@ class Memoria:
             linha = self._db.execute("SELECT * FROM leads WHERE conversa = ?", (conversa,)).fetchone()
         if not linha:
             return {"conversa": conversa, "username": None, "nome": None, "ficha": None,
-                    "pausado_ate": 0.0, "transferido": 0}
+                    "pausado_ate": 0.0, "transferido": 0, "followup_em": 0.0}
         dados = dict(linha)
         dados["ficha"] = json.loads(dados["ficha"]) if dados["ficha"] else None
         return dados
@@ -128,3 +129,21 @@ class Memoria:
             conversas = [r["conversa"] for r in self._db.execute(
                 "SELECT conversa FROM leads ORDER BY atualizado_em DESC")]
         return [self.lead(c) for c in conversas]
+
+    def enviadas_desde(self, conversa: str, desde: float) -> int:
+        """Quantas mensagens o agente mandou nesta conversa desde o instante dado."""
+        with self._trava:
+            return self._db.execute(
+                "SELECT COUNT(*) FROM mensagens WHERE conversa = ? AND papel = 'assistant' AND criado_em >= ?",
+                (conversa, desde)).fetchone()[0]
+
+    def ultimas(self, conversa: str) -> tuple[dict | None, float]:
+        """(última mensagem da conversa, horário da última fala do lead)."""
+        with self._trava:
+            ultima = self._db.execute(
+                "SELECT papel, criado_em FROM mensagens WHERE conversa = ? ORDER BY id DESC LIMIT 1",
+                (conversa,)).fetchone()
+            lead = self._db.execute(
+                "SELECT MAX(criado_em) FROM mensagens WHERE conversa = ? AND papel = 'user'",
+                (conversa,)).fetchone()[0]
+        return (dict(ultima) if ultima else None), (lead or 0.0)

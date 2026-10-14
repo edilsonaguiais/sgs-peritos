@@ -6,13 +6,16 @@ Rodar:  uvicorn agente_direct.app:app --host 0.0.0.0 --port 8000
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 
-from .cerebro import Cerebro, montar_sistema
+from .cerebro import Cerebro, links_permitidos, montar_sistema
 from .config import Config
 from .instagram import ClienteInstagram, Evento, assinatura_valida, dividir, extrair_eventos
 from .memoria import Memoria
@@ -90,8 +93,21 @@ class Orquestrador:
                 self.memoria.atualizar_lead(conversa, username=perfil.get("username"),
                                             nome=perfil.get("name"))
                 lead = self.memoria.lead(conversa)
+
+        usuario = (lead["username"] or "").lower()
+        if usuario in self.cfg.bloqueados or conversa in self.cfg.bloqueados:
+            return  # sócio, família, equipe: o agente nunca responde
+        if self.cfg.sandbox and usuario not in self.cfg.sandbox:
+            log.info("SANDBOX: ignorando @%s (fora da lista de teste).", usuario or conversa)
+            return
+        if self.memoria.enviadas_desde(conversa, time.time() - 86400) >= self.cfg.max_msgs_sessao:
+            self.memoria.atualizar_lead(conversa, transferido=1)
+            await self.notificar(conversa, f"conversa longa: {self.cfg.max_msgs_sessao} mensagens em 24 h")
+            return
+
+        hoje = datetime.now(ZoneInfo(self.cfg.fuso)).strftime("%d/%m/%Y")
         contexto = ", ".join(f"{k}: {v}" for k, v in
-                             (("nome", lead["nome"]), ("@", lead["username"])) if v)
+                             (("data de hoje", hoje), ("nome", lead["nome"]), ("@", lead["username"])) if v)
 
         await self.ig.digitando(conversa)
         decisao = await self.cerebro.decidir(historico, contexto)
@@ -112,6 +128,50 @@ class Orquestrador:
             self.memoria.atualizar_lead(conversa, transferido=1)
             await self.notificar(conversa, decisao.motivo)
 
+    # --- follow-up ---------------------------------------------------------
+    async def verificar_followups(self, agora: float | None = None) -> int:
+        """Manda UM toque a quem sumiu, ainda dentro da janela de 24 h do Instagram.
+
+        Fora da janela a Meta não entrega mensagem, por isso não existe segundo toque.
+        """
+        agora = agora or time.time()
+        hora = datetime.fromtimestamp(agora, ZoneInfo(self.cfg.fuso)).hour
+        if not (self.cfg.followup_hora_inicio <= hora < self.cfg.followup_hora_fim):
+            return 0
+        enviados = 0
+        for lead in self.memoria.listar_leads():
+            conversa = lead["conversa"]
+            if self.memoria.esta_pausado(conversa) or conversa in self._ocupado:
+                continue
+            ultima, ultima_do_lead = self.memoria.ultimas(conversa)
+            ficha = lead["ficha"] or {}
+            if (not ultima or ultima["papel"] != "assistant"
+                    or lead["followup_em"] >= ultima_do_lead
+                    or ficha.get("estagio") in ("desqualificado", "suporte")
+                    or ficha.get("produto_recomendado") in ("nenhum", None)):
+                continue
+            idade_h = (agora - ultima_do_lead) / 3600
+            if not (self.cfg.followup_apos_h <= idade_h < 23.5):
+                continue
+            texto = texto_followup(lead["nome"], ficha.get("dor_resumida", ""))
+            for pedaco in dividir(texto):
+                self._ecos_esperados.add((conversa, pedaco))
+            mids = await self.ig.enviar_texto(conversa, texto)
+            for mid in mids:
+                self.memoria.marcar_enviado(mid)
+            self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
+            self.memoria.atualizar_lead(conversa, followup_em=agora)
+            enviados += 1
+        return enviados
+
+    async def laco_followup(self, intervalo_s: float = 600) -> None:
+        while True:
+            try:
+                await self.verificar_followups()
+            except Exception:
+                log.exception("Erro no follow-up")
+            await asyncio.sleep(intervalo_s)
+
     async def notificar(self, conversa: str, motivo: str) -> None:
         lead = self.memoria.lead(conversa)
         log.warning("TRANSFERIR %s (@%s): %s", conversa, lead["username"], motivo)
@@ -128,15 +188,33 @@ class Orquestrador:
             log.exception("Falha ao notificar %s", self.cfg.notificar_url)
 
 
-def criar_app(cfg: Config | None = None, orquestrador: Orquestrador | None = None) -> FastAPI:
+def texto_followup(nome: str | None, dor: str) -> str:
+    """Copy do atalho /sumiu1 da casa."""
+    primeiro = (nome or "").split(" ")[0]
+    sobre = f" sobre {dor.strip().rstrip('.')}" if dor and dor.strip() else ""
+    frase = f"retomo nossa conversa{sobre}. Ficou algum ponto sem resposta para você decidir?"
+    return f"{primeiro}, {frase}" if primeiro else frase[0].upper() + frase[1:]
+
+
+def criar_app(cfg: Config | None = None, orquestrador: Orquestrador | None = None,
+              followup: bool = True) -> FastAPI:
     cfg = cfg or Config.do_ambiente()
     if orquestrador is None:
         memoria = Memoria(cfg.banco)
         ig = ClienteInstagram(cfg.ig_access_token, cfg.graph_versao, cfg.modo_teste)
-        cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento), cfg.modelo, cfg.esforco)
+        cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento), cfg.modelo, cfg.esforco,
+                          links=links_permitidos(cfg.pasta_conhecimento))
         orquestrador = Orquestrador(cfg, memoria, ig, cerebro)
     orq = orquestrador
-    app = FastAPI(title="Agente Direct — Edilson Aguiais")
+
+    @contextlib.asynccontextmanager
+    async def ciclo(_app):
+        tarefa = asyncio.create_task(orq.laco_followup()) if followup else None
+        yield
+        if tarefa:
+            tarefa.cancel()
+
+    app = FastAPI(title="Agente Direct — Edilson Aguiais", lifespan=ciclo)
     app.state.orquestrador = orq
 
     def _admin(autorizacao: str | None) -> None:

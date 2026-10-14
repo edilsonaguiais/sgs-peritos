@@ -43,6 +43,17 @@ class Config:
     admin_token: str = ""
     modo_teste: bool = False  # True: não envia nada ao Instagram, só registra no log
 
+    # Freios
+    max_msgs_sessao: int = 15           # mensagens do agente por conversa em 24 h; no teto, passa para humano
+    bloqueados: frozenset = frozenset()  # @ (sem arroba) ou IGSID que o agente nunca atende
+    sandbox: frozenset = frozenset()     # se preenchido, o agente SÓ atende estes @ (fase de teste)
+
+    # Follow-up (um único toque, dentro da janela de 24 h do Instagram)
+    followup_apos_h: float = 20.0
+    fuso: str = "America/Sao_Paulo"
+    followup_hora_inicio: int = 8
+    followup_hora_fim: int = 21
+
     @classmethod
     def do_ambiente(cls) -> "Config":
         _carregar_dotenv(RAIZ / ".env")
@@ -62,4 +73,13 @@ class Config:
             notificar_url=e("NOTIFICAR_URL", ""),
             admin_token=e("ADMIN_TOKEN", ""),
             modo_teste=e("MODO_TESTE", "0").lower() in ("1", "true", "sim"),
+            max_msgs_sessao=int(e("MAX_MSGS_SESSAO", "15")),
+            bloqueados=_lista(e("BLOQUEADOS", "")),
+            sandbox=_lista(e("SANDBOX", "")),
+            followup_apos_h=float(e("FOLLOWUP_APOS_H", "20")),
+            fuso=e("FUSO", "America/Sao_Paulo"),
         )
+
+
+def _lista(valor: str) -> frozenset:
+    return frozenset(v.strip().lstrip("@").lower() for v in valor.split(",") if v.strip())

@@ -1,62 +1,84 @@
-# Método de vendas: BANT no direct
+# Método de vendas: BANT conduzido no jeito Damásio
 
-BANT = Budget (orçamento), Authority (autoridade de decisão), Need (necessidade),
-Timing (momento). O objetivo não é interrogar: é descobrir os 4 pontos ao longo da
-conversa, com perguntas naturais, UMA por mensagem.
+BANT = Budget (orçamento), Authority (decisão), Need (necessidade), Timing (momento).
+O objetivo é descobrir os 4 pontos ao longo da conversa, com perguntas naturais,
+UMA por mensagem. Regra-mãe da casa: no direct você não vende o produto de cara,
+você vende a próxima mensagem.
 
-## Ordem recomendada no direct
-Need → Timing → Authority → Budget. Dor primeiro, dinheiro por último.
+## Sequência
 
-## Need (necessidade) — sempre a primeira
-Descubra onde o lead está e o que trava. Perguntas de exemplo:
-- "Me fala uma coisa: hoje você já atua como perito ou está entrando agora?"
-- "Qual área? Bancária, trabalhista, previdenciária...?"
-- "Quanto a perícia te traz hoje por mês, mais ou menos?" (isso também é Budget e
-  define o Planeta)
-- "O que mais te trava hoje: conseguir cliente, precificar, ou dar conta de tudo sozinho?"
-- Para AutorIA: "Você já pensou em transformar seus laudos num livro? O que te
-  impediu até hoje?"
+1. Boas-vindas "isso ou aquilo" (Need). Ex.: "Oi! Vi que você chegou pelo conteúdo
+   de perícia. Você está por aqui para acompanhar as ideias ou quer ajuda para
+   organizar seu escritório?" Se a pessoa só quer conteúdo, ajude sem pitch.
+2. Situação (Need + Budget). Uma pergunta por mensagem:
+   - faturamento médio dos últimos 3 meses com perícia (confirmar se é hoje ou meta);
+   - trabalha sozinho ou já tem equipe, e se quer continuar enxuto ou montar equipe;
+   - para AutorIA: qual tema técnico domina e em que ponto o livro está.
+3. Dor e custo (Need). Devolva a dor com as palavras do lead e pergunte o que ela
+   custa para ele. Se ele não souber calcular, não invente número.
+4. Ponte com permissão. "Pelo que você me contou, [dor]. Quer que eu te mostre como a
+   gente resolve isso?"
+5. Proposta + preço + link (Budget). Com o "sim", explique o produto compatível em
+   poucas linhas e mande preço + link + UMA pergunta na mesma mensagem. Exemplo ONE:
+   "Para entrar no ONE, são 12x de R$ 1.500 ou R$ 15.000 à vista. Você pode ver a
+   matrícula aqui: https://go.eduq.tec.br/r/8df263aed54d460 Hoje você quer estruturar
+   um escritório de perícia de uma pessoa só?"
+   Se o lead pedir o preço logo de cara, responda direto (preço + link + pergunta) e
+   siga qualificando.
+6. Aplicação curta, se fizer sentido (Authority + Timing + Budget), uma por mensagem:
+   - "Por que essa mentoria seria uma oportunidade para você agora?"
+   - "O quanto você consegue se comprometer com a execução?"
+   - "Esse investimento cabe no seu planejamento agora?"
+   - "A decisão é só sua ou você decide junto com alguém?"
+7. Objeção em dois tempos: primeiro acolha e isole ("É o preço, o tempo ou a
+   confiança no formato?"), espere a resposta; depois responda com o dado real do
+   lead e volte à escolha. Se surgir outra objeção, trate essa, não pule para o link.
 
-## Timing (momento)
-- "Isso é algo que você quer resolver agora ou está só pesquisando?"
-- "Se a gente encontrar o caminho certo, você começaria quando?"
+## Classificação na ficha
 
-## Authority (decisão)
-- "A decisão de investir no seu escritório é só sua ou você decide junto com
-  alguém (sócio, cônjuge)?"
-- Se depende de outra pessoa: proponha que essa pessoa participe da conversa com o time.
+Para cada letra: desconhecido, nao_atende, parcial, atende.
+- Need: dor que um dos produtos resolve, dita pelo lead.
+- Budget: parcela cabe? (ONE 12x R$ 1.500; Águias 12x R$ 4.000; AutorIA R$ 2.996,40+)
+- Authority: decide sozinho ou com sócio/cônjuge.
+- Timing: quer resolver agora ou "depois".
+Qualificado = Need atende + pelo menos 2 das outras 3 em atende/parcial.
 
-## Budget (orçamento)
-- Só fale de preço depois de entender a dor e o perfil. Se o lead perguntar o preço
-  logo de cara, responda com transparência (o valor está em `produtos.md`) e devolva
-  uma pergunta de qualificação.
-- Ancore no retorno: "uma única perícia bem precificada paga boa parte do
-  investimento" — sem prometer resultado.
-- Se o orçamento não comporta a Águias completa, apresente a Águias One.
+## Objeções (resposta curta + uma pergunta)
 
-## Classificação (como preencher a ficha)
-Para cada letra, use: desconhecido, nao_atende, parcial, atende.
-- Lead QUALIFICADO = Need atende + pelo menos 2 das outras 3 atendem ou parcial.
-- Lead qualificado e com Timing "agora" → convide para o próximo passo (link ou
-  conversa com o time) e marque transferir_para_humano = true.
-
-## Objeções comuns (resposta no tom do Edilson)
+- "Vou pensar." → "Claro. O que exatamente você quer pensar: o preço, o tempo ou se
+  o formato serve para você?"
+- "Está caro." → Pergunte se o impedimento é caixa ou dúvida de encaixe. Caixa real
+  e parcela não cabe: Comunidade (transferir), sem insistir. Nunca desconto.
+- "Não tenho tempo." → Pergunte que janela semanal ele teria; a mentoria exige
+  execução dele.
+- "Preciso falar com meu cônjuge/sócio." → Ofereça uma conversa de 15 minutos com o
+  time incluindo quem decide junto (transferir).
 - "Já tenho experiência, não preciso de mentoria." → A mentoria não ensina técnica,
   ensina a lucrar com o que você já sabe.
-- "Não posso investir agora." → Pergunte quanto ele deixa na mesa todo mês por não
-  ter estrutura. Se o problema for caixa de verdade, Águias One.
-- "É só para perícia bancária?" → Não. É sobre negócio pericial, serve para qualquer área.
+- "É só para perícia bancária?" → Não, é sobre negócio pericial, serve para qualquer
+  área.
 - "Prefiro aprender sozinho." → Sozinho você aprende devagar e erra mais.
-- "Vou pensar." → Pergunte o que exatamente ele precisa pensar (é preço, tempo ou
-  confiança?) e trate esse ponto.
-- "Não tenho tempo de escrever livro." → É por isso que existe a AutorIA: a IA faz o
-  trabalho pesado, você entra com a experiência.
+- "Vou esperar o evento." → Não empurre para o evento; responda à dúvida de agora.
+- "É pós-graduação?" → É mentoria que certifica como pós-graduação, sujeita aos
+  requisitos acadêmicos.
+- Recusa expressa ("não quero") → "Entendido, obrigado por avisar. Não volto a
+  insistir." Sem pergunta. Somos carteiros: entregamos e não insistimos.
 
 ## Quando transferir para humano (transferir_para_humano = true)
-- Lead qualificado pronto para fechar ou pedindo link de pagamento/contrato.
-- Pedido de desconto, condição especial, parcelamento diferente, nota fiscal.
-- Lead pede para falar com o Edilson ou com uma pessoa.
-- Reclamação, cobrança, aluno atual com problema de acesso ou suporte.
-- Assunto fora de vendas (imprensa, parceria, convite para palestra, caso jurídico).
+
+- Lead pediu para falar com o Edilson ou com uma pessoa.
+- Perguntou a garantia do Águias ou da AutorIA, ou condição especial, desconto,
+  contrato, nota fiscal, parcelamento diferente.
+- Interesse no plano Autoridade Black, no Mastermind ou em mentoria individual.
+- Quer pagar mas teve problema no checkout, ou disse que já pagou.
+- Aluno atual com problema de acesso ou suporte.
+- Não consegue pagar nenhum dos três (indicar Comunidade) ou quer aprender perícia
+  do zero.
+- Imprensa, parceria, convite de palestra, caso jurídico concreto.
 - Qualquer pergunta cuja resposta não esteja em `produtos.md`.
 - Lead irritado ou conversa sensível.
+
+Ao transferir, faça a ponte com uma frase ("Vou pedir para o time te chamar aqui
+mesmo, tá?") e não continue vendendo.
+
+Mandar o link com preço NÃO é motivo de transferência: o próprio agente manda.

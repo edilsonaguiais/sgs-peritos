@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,9 +56,13 @@ ESQUEMA_RESPOSTA = {
         "transferir_para_humano": {"type": "boolean"},
         "motivo_transferencia": {"type": "string"},
         "resumo_lead": {"type": "string", "description": "2 a 3 frases para a equipe comercial."},
+        "dor_resumida": {"type": "string", "description": (
+            "A dor principal nas palavras do lead, curta, para completar a frase "
+            "'retomo nossa conversa sobre ...'. Ex.: 'conseguir clientes sem depender de indicação'. "
+            "Vazio se ainda não se sabe.")},
     },
     "required": ["mensagens", "bant", "perfil", "produto_recomendado", "estagio",
-                 "transferir_para_humano", "motivo_transferencia", "resumo_lead"],
+                 "transferir_para_humano", "motivo_transferencia", "resumo_lead", "dor_resumida"],
     "additionalProperties": False,
 }
 
@@ -71,9 +76,13 @@ de voz, os produtos e o método. Siga-os.
 Regras que valem acima de tudo:
 - Escreva com o tom de voz do documento. Mensagens curtas de direct, sem markdown,
   uma pergunta por vez.
-- Use só os fatos de <produtos>. Se um dado estiver marcado [PREENCHER] ou não
-  existir, não invente: diga que vai confirmar com o time e marque
-  transferir_para_humano = true.
+- Use só os fatos de <produtos>. Se um dado não estiver lá, não invente: diga que vai
+  confirmar com o time e marque transferir_para_humano = true.
+- Links: copie exatamente os de <produtos>, sem alterar nada. Um link fora da lista é
+  bloqueado e a conversa vai para o time.
+- Com interesse do lead, mande preço + link + uma pergunta na mesma mensagem. Você
+  mesmo envia o link; não precisa transferir para isso.
+- A data de hoje vem em <contexto_do_lead>. Respeite as validades de <produtos>.
 - Se perguntarem se é robô, IA ou assistente automático, não negue: diga que é o
   assistente do Edilson no direct e ofereça chamar alguém do time.
 - Não peça dados sensíveis (CPF, cartão, senha) pelo direct.
@@ -85,8 +94,10 @@ Regras que valem acima de tudo:
   não consegue ver nem ouvir. Peça com naturalidade que a pessoa escreva o principal.
 - Mensagens marcadas "[resposta enviada manualmente pela equipe]" foram escritas pelo
   time; continue a partir delas sem contradizê-las.
-- Preencha a ficha (bant, perfil, produto_recomendado, estagio, resumo_lead) com tudo o
-  que já se sabe na conversa inteira, não só na última mensagem.
+- Preencha a ficha (bant, perfil, produto_recomendado, estagio, resumo_lead,
+  dor_resumida) com tudo o que já se sabe na conversa inteira, não só na última
+  mensagem. Se o lead recusou ou não tem perfil, estagio = desqualificado; se já é
+  aluno ou já comprou, estagio = suporte. Nesses dois casos ninguém faz follow-up.
 """
 
 
@@ -96,6 +107,24 @@ class Decisao:
     ficha: dict
     transferir: bool
     motivo: str
+
+
+RE_URL = re.compile(r"https?://[^\s<>\"']+")
+
+
+def extrair_links(texto: str) -> set[str]:
+    return {u.rstrip(".,;:!?)]*`") for u in RE_URL.findall(texto)}
+
+
+def links_permitidos(pasta: Path) -> set[str]:
+    """Os únicos links que o agente pode mandar: os que estão em produtos.md."""
+    return extrair_links((pasta / "produtos.md").read_text(encoding="utf-8"))
+
+
+def limpar(texto: str) -> str:
+    """Rede de segurança de estilo: a casa não usa travessão."""
+    texto = re.sub(r"\s*[—–]\s*", ", ", texto)
+    return re.sub(r",\s*,", ",", texto).strip()
 
 
 def montar_sistema(pasta: Path) -> str:
@@ -112,8 +141,9 @@ def montar_sistema(pasta: Path) -> str:
 
 class Cerebro:
     def __init__(self, sistema: str, modelo: str = "claude-opus-5-5", esforco: str = "medium",
-                 cliente: anthropic.AsyncAnthropic | None = None):
+                 cliente: anthropic.AsyncAnthropic | None = None, links: set[str] | None = None):
         self.sistema = sistema
+        self.links = links
         self.modelo = modelo
         self.esforco = esforco
         self.cliente = cliente or anthropic.AsyncAnthropic()
@@ -153,6 +183,13 @@ class Cerebro:
             log.error("JSON inválido do modelo: %r", texto[:500])
             return Decisao([], {}, True, "resposta inválida do modelo")
 
-        mensagens_saida = [m.strip() for m in dados.pop("mensagens", []) if m and m.strip()][:3]
+        mensagens_saida = [limpar(m) for m in dados.pop("mensagens", []) if m and m.strip()][:3]
         transferir = bool(dados.get("transferir_para_humano"))
-        return Decisao(mensagens_saida, dados, transferir, dados.get("motivo_transferencia", ""))
+        motivo = dados.get("motivo_transferencia", "")
+
+        if self.links is not None:
+            estranhos = set().union(*(extrair_links(m) for m in mensagens_saida)) - self.links
+            if estranhos:
+                log.error("Link fora de produtos.md bloqueado: %s", estranhos)
+                return Decisao([], dados, True, f"o agente tentou enviar link não autorizado: {sorted(estranhos)}")
+        return Decisao(mensagens_saida, dados, transferir, motivo)
