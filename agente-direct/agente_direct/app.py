@@ -1,0 +1,201 @@
+"""Servidor do webhook: recebe o direct do Instagram e responde com o agente.
+
+Rodar:  uvicorn agente_direct.app:app --host 0.0.0.0 --port 8000
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+
+import httpx
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+
+from .cerebro import Cerebro, montar_sistema
+from .config import Config
+from .instagram import ClienteInstagram, Evento, assinatura_valida, dividir, extrair_eventos
+from .memoria import Memoria
+
+log = logging.getLogger("agente_direct")
+
+
+class Orquestrador:
+    """Agrupa as mensagens de cada lead, chama o agente e envia a resposta."""
+
+    def __init__(self, cfg: Config, memoria: Memoria, ig: ClienteInstagram, cerebro: Cerebro):
+        self.cfg, self.memoria, self.ig, self.cerebro = cfg, memoria, ig, cerebro
+        self._timers: dict[str, asyncio.Task] = {}
+        self._ocupado: set[str] = set()
+        self._pendente: set[str] = set()
+        self._ecos_esperados: set[tuple[str, str]] = set()
+
+    # --- entrada ---------------------------------------------------------
+    def receber(self, evento: Evento) -> None:
+        if evento.eco:
+            self._receber_eco(evento)
+            return
+        if not self.memoria.registrar(evento.conversa, "user", evento.texto, evento.mid or None):
+            return  # a Meta reenviou um webhook que já processamos
+        self.agendar(evento.conversa)
+
+    def _receber_eco(self, evento: Evento) -> None:
+        chave = (evento.conversa, evento.texto)
+        if chave in self._ecos_esperados:
+            self._ecos_esperados.discard(chave)
+            return
+        if not evento.mid or self.memoria.foi_enviado_pelo_agente(evento.mid):
+            return
+        # Mensagem que você mandou pelo app: registra e tira o agente da conversa por um tempo.
+        if self.memoria.registrar(evento.conversa, "humano", evento.texto, evento.mid):
+            self.memoria.pausar(evento.conversa, self.cfg.pausa_humano_horas)
+            log.info("Você respondeu %s manualmente; agente pausado por %sh.",
+                     evento.conversa, self.cfg.pausa_humano_horas)
+
+    def agendar(self, conversa: str) -> None:
+        if conversa in self._ocupado:
+            self._pendente.add(conversa)
+            return
+        anterior = self._timers.get(conversa)
+        if anterior and not anterior.done():
+            anterior.cancel()
+        self._timers[conversa] = asyncio.create_task(self._esperar_e_responder(conversa))
+
+    async def _esperar_e_responder(self, conversa: str) -> None:
+        # Espera o lead terminar de digitar: quem manda 3 balões seguidos recebe 1 resposta.
+        await asyncio.sleep(self.cfg.espera_agrupar_s)
+        self._ocupado.add(conversa)
+        try:
+            await self.responder(conversa)
+        except Exception:
+            log.exception("Erro ao responder %s", conversa)
+        finally:
+            self._ocupado.discard(conversa)
+            if conversa in self._pendente:
+                self._pendente.discard(conversa)
+                self.agendar(conversa)
+
+    # --- resposta --------------------------------------------------------
+    async def responder(self, conversa: str) -> None:
+        if self.memoria.esta_pausado(conversa):
+            return
+        historico = self.memoria.historico(conversa)
+        if not historico or historico[-1]["role"] != "user":
+            return
+
+        lead = self.memoria.lead(conversa)
+        if not lead["username"]:
+            perfil = await self.ig.perfil(conversa)
+            if perfil:
+                self.memoria.atualizar_lead(conversa, username=perfil.get("username"),
+                                            nome=perfil.get("name"))
+                lead = self.memoria.lead(conversa)
+        contexto = ", ".join(f"{k}: {v}" for k, v in
+                             (("nome", lead["nome"]), ("@", lead["username"])) if v)
+
+        await self.ig.digitando(conversa)
+        decisao = await self.cerebro.decidir(historico, contexto)
+
+        for texto in decisao.mensagens:
+            if self.memoria.esta_pausado(conversa):
+                break  # você assumiu a conversa enquanto o agente pensava
+            for pedaco in dividir(texto):
+                self._ecos_esperados.add((conversa, pedaco))
+            mids = await self.ig.enviar_texto(conversa, texto)
+            for mid in mids:
+                self.memoria.marcar_enviado(mid)
+            self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
+
+        if decisao.ficha:
+            self.memoria.atualizar_lead(conversa, ficha=decisao.ficha)
+        if decisao.transferir:
+            self.memoria.atualizar_lead(conversa, transferido=1)
+            await self.notificar(conversa, decisao.motivo)
+
+    async def notificar(self, conversa: str, motivo: str) -> None:
+        lead = self.memoria.lead(conversa)
+        log.warning("TRANSFERIR %s (@%s): %s", conversa, lead["username"], motivo)
+        if not self.cfg.notificar_url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                await http.post(self.cfg.notificar_url, json={
+                    "evento": "lead_para_humano", "conversa": conversa,
+                    "username": lead["username"], "nome": lead["nome"],
+                    "motivo": motivo, "ficha": lead["ficha"], "em": time.time(),
+                })
+        except httpx.HTTPError:
+            log.exception("Falha ao notificar %s", self.cfg.notificar_url)
+
+
+def criar_app(cfg: Config | None = None, orquestrador: Orquestrador | None = None) -> FastAPI:
+    cfg = cfg or Config.do_ambiente()
+    if orquestrador is None:
+        memoria = Memoria(cfg.banco)
+        ig = ClienteInstagram(cfg.ig_access_token, cfg.graph_versao, cfg.modo_teste)
+        cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento), cfg.modelo, cfg.esforco)
+        orquestrador = Orquestrador(cfg, memoria, ig, cerebro)
+    orq = orquestrador
+    app = FastAPI(title="Agente Direct — Edilson Aguiais")
+    app.state.orquestrador = orq
+
+    def _admin(autorizacao: str | None) -> None:
+        if not cfg.admin_token or autorizacao != f"Bearer {cfg.admin_token}":
+            raise HTTPException(401, "não autorizado")
+
+    @app.get("/saude")
+    async def saude():
+        return {"ok": True, "modelo": cfg.modelo, "modo_teste": cfg.modo_teste}
+
+    @app.get("/webhook")
+    async def verificar(modo: str = Query("", alias="hub.mode"),
+                        token: str = Query("", alias="hub.verify_token"),
+                        desafio: str = Query("", alias="hub.challenge")):
+        # A Meta chama isto uma vez, quando você cadastra a URL do webhook no painel.
+        if modo == "subscribe" and cfg.ig_verify_token and token == cfg.ig_verify_token:
+            return Response(content=desafio, media_type="text/plain")
+        raise HTTPException(403, "token de verificação inválido")
+
+    @app.post("/webhook")
+    async def webhook(request: Request, x_hub_signature_256: str | None = Header(None)):
+        corpo = await request.body()
+        if not assinatura_valida(corpo, x_hub_signature_256, cfg.ig_app_secret):
+            raise HTTPException(401, "assinatura inválida")
+        for evento in extrair_eventos(await request.json(), cfg.ig_user_id):
+            orq.receber(evento)
+        return {"ok": True}  # responder rápido: a Meta reenvia se demorar
+
+    @app.get("/leads")
+    async def leads(authorization: str | None = Header(None)):
+        _admin(authorization)
+        return orq.memoria.listar_leads()
+
+    @app.get("/leads/{conversa}")
+    async def lead(conversa: str, authorization: str | None = Header(None)):
+        _admin(authorization)
+        return {**orq.memoria.lead(conversa), "historico": orq.memoria.historico(conversa, 200)}
+
+    @app.post("/leads/{conversa}/retomar")
+    async def retomar(conversa: str, authorization: str | None = Header(None)):
+        """Devolve a conversa para o agente (depois de uma transferência ou pausa)."""
+        _admin(authorization)
+        orq.memoria.atualizar_lead(conversa, pausado_ate=0, transferido=0)
+        return {"ok": True}
+
+    @app.post("/leads/{conversa}/pausar")
+    async def pausar(conversa: str, horas: float = 24 * 365, authorization: str | None = Header(None)):
+        _admin(authorization)
+        orq.memoria.pausar(conversa, horas)
+        return {"ok": True}
+
+    return app
+
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+def __getattr__(nome: str):
+    # `uvicorn agente_direct.app:app` cria o app só quando é pedido (os testes não precisam de .env).
+    if nome == "app":
+        return criar_app()
+    raise AttributeError(nome)

@@ -1,0 +1,180 @@
+import asyncio
+import hashlib
+import hmac
+import json
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from agente_direct.app import Orquestrador, criar_app
+from agente_direct.cerebro import ESQUEMA_RESPOSTA, Decisao, montar_sistema
+from agente_direct.config import Config, RAIZ
+from agente_direct.instagram import ClienteInstagram, dividir, extrair_eventos
+from agente_direct.memoria import Memoria
+
+SEGREDO = "segredo-do-app"
+CONTA = "17841400000000000"
+LEAD = "990011"
+
+
+class CerebroFalso:
+    def __init__(self, mensagens=("Fala, Doutor! Você já atua como perito?",), transferir=False):
+        self.mensagens, self.transferir, self.chamadas = list(mensagens), transferir, []
+
+    async def decidir(self, historico, contexto_lead=""):
+        self.chamadas.append(historico)
+        return Decisao(self.mensagens, {"produto_recomendado": "aguias_da_pericia"},
+                       self.transferir, "lead pronto" if self.transferir else "")
+
+
+def montar(cerebro=None, enviados=None):
+    cfg = Config(ig_access_token="tok", ig_app_secret=SEGREDO, ig_verify_token="verifica",
+                 ig_user_id=CONTA, espera_agrupar_s=0.05, admin_token="adm")
+    enviados = enviados if enviados is not None else []
+
+    def handler(request: httpx.Request):
+        if request.method == "POST":
+            corpo = json.loads(request.content)
+            if "message" in corpo:
+                enviados.append(corpo["message"]["text"])
+            return httpx.Response(200, json={"recipient_id": LEAD, "message_id": f"m_bot_{len(enviados)}"})
+        return httpx.Response(200, json={"username": "dra.carla", "name": "Carla"})
+
+    ig = ClienteInstagram("tok", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    orq = Orquestrador(cfg, Memoria(":memory:"), ig, cerebro or CerebroFalso())
+    return cfg, orq, enviados
+
+
+def payload(texto, mid, eco=False):
+    remetente, destino = (CONTA, LEAD) if eco else (LEAD, CONTA)
+    msg = {"mid": mid, "text": texto}
+    if eco:
+        msg["is_echo"] = True
+    return {"object": "instagram", "entry": [{"id": CONTA, "time": 1, "messaging": [
+        {"sender": {"id": remetente}, "recipient": {"id": destino}, "timestamp": 1, "message": msg}]}]}
+
+
+def assinar(corpo: bytes) -> str:
+    return "sha256=" + hmac.new(SEGREDO.encode(), corpo, hashlib.sha256).hexdigest()
+
+
+def test_verificacao_do_webhook():
+    cfg, orq, _ = montar()
+    cliente = TestClient(criar_app(cfg, orq))
+    ok = cliente.get("/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "verifica",
+                                         "hub.challenge": "123"})
+    assert ok.status_code == 200 and ok.text == "123"
+    assert cliente.get("/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "x",
+                                           "hub.challenge": "1"}).status_code == 403
+
+
+def test_rejeita_assinatura_invalida():
+    cfg, orq, _ = montar()
+    cliente = TestClient(criar_app(cfg, orq))
+    corpo = json.dumps(payload("oi", "m1")).encode()
+    r = cliente.post("/webhook", content=corpo, headers={"X-Hub-Signature-256": "sha256=errado"})
+    assert r.status_code == 401
+
+
+def test_agrupa_mensagens_e_responde_uma_vez():
+    async def cenario():
+        _, orq, enviados = montar()
+        for i, texto in enumerate(["oi", "vi seu post", "quero saber da mentoria"]):
+            for ev in extrair_eventos(payload(texto, f"m{i}"), CONTA):
+                orq.receber(ev)
+        await asyncio.sleep(0.3)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert len(orq.cerebro.chamadas) == 1
+    assert orq.cerebro.chamadas[0][-1]["content"] == "oi\nvi seu post\nquero saber da mentoria"
+    assert enviados == ["Fala, Doutor! Você já atua como perito?"]
+    lead = orq.memoria.lead(LEAD)
+    assert lead["username"] == "dra.carla"
+    assert lead["ficha"]["produto_recomendado"] == "aguias_da_pericia"
+
+
+def test_webhook_repetido_nao_gera_segunda_resposta():
+    async def cenario():
+        _, orq, enviados = montar()
+        for _ in range(2):
+            for ev in extrair_eventos(payload("oi", "m-dup"), CONTA):
+                orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return enviados
+
+    assert len(asyncio.run(cenario())) == 1
+
+
+def test_eco_do_agente_e_ignorado_e_resposta_humana_pausa():
+    async def cenario():
+        _, orq, enviados = montar()
+        for ev in extrair_eventos(payload("oi", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        # eco da mensagem que o próprio agente enviou: não pausa
+        for ev in extrair_eventos(payload(enviados[0], "m_bot_1", eco=True), CONTA):
+            orq.receber(ev)
+        assert not orq.memoria.esta_pausado(LEAD)
+        # você responde pelo app: pausa e o agente fica quieto
+        for ev in extrair_eventos(payload("Oi Carla, aqui é o Edilson!", "m_humano", eco=True), CONTA):
+            orq.receber(ev)
+        assert orq.memoria.esta_pausado(LEAD)
+        for ev in extrair_eventos(payload("que legal!", "m2"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert len(enviados) == 1
+    hist = orq.memoria.historico(LEAD)
+    assert "[resposta enviada manualmente pela equipe]" in hist[1]["content"]
+
+
+def test_transferencia_para_humano_desliga_agente():
+    async def cenario():
+        _, orq, enviados = montar(CerebroFalso(["Vou te passar pro time agora."], transferir=True))
+        for ev in extrair_eventos(payload("quero pagar à vista", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        for ev in extrair_eventos(payload("e aí?", "m2"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert enviados == ["Vou te passar pro time agora."]
+    assert orq.memoria.lead(LEAD)["transferido"] == 1
+
+
+def test_anexos_viram_descricao():
+    p = payload("", "m1")
+    p["entry"][0]["messaging"][0]["message"] = {"mid": "m1", "attachments": [{"type": "audio"}]}
+    assert extrair_eventos(p, CONTA)[0].texto == "[o lead enviou um áudio]"
+
+
+def test_dividir_respeita_limite_de_bytes():
+    texto = "perícia " * 400
+    partes = dividir(texto)
+    assert all(len(p.encode()) <= 1000 for p in partes)
+    assert " ".join(partes) == texto.strip()
+
+
+def test_prompt_inclui_os_tres_documentos():
+    sistema = montar_sistema(RAIZ / "conhecimento")
+    for marca in ("<tom_de_voz>", "<produtos>", "<metodo_bant>", "Águias One", "AutorIA 10X"):
+        assert marca in sistema
+
+
+def _sem_propriedades_soltas(no):
+    if isinstance(no, dict):
+        if no.get("type") == "object":
+            assert no.get("additionalProperties") is False
+            assert set(no["required"]) == set(no["properties"])
+        for v in no.values():
+            _sem_propriedades_soltas(v)
+
+
+def test_esquema_valido_para_saida_estruturada():
+    _sem_propriedades_soltas(ESQUEMA_RESPOSTA)
