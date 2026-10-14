@@ -10,7 +10,8 @@ REPO="${AGENTE_REPO:-edilsonaguiais/sgs-peritos}"
 RAMO="${AGENTE_RAMO:-claude/agente-direct-instagram}"
 SUBPASTA="${AGENTE_SUBPASTA:-agente-direct}"
 PASTA="${AGENTE_PASTA:-/opt/agente-direct}"
-URL_INSTALADOR="https://raw.githubusercontent.com/$REPO/$RAMO/$SUBPASTA/instalar.sh"
+# SUBPASTA vazia = o agente está na raiz do repositório
+URL_INSTALADOR="https://raw.githubusercontent.com/$REPO/$RAMO/${SUBPASTA:+$SUBPASTA/}instalar.sh"
 ATUALIZAR=0
 [ "${1:-}" = "--atualizar" ] && ATUALIZAR=1
 
@@ -31,8 +32,12 @@ passo "2/5 Baixando o agente"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/$RAMO" | tar -xz -C "$tmp"
-origem="$(find "$tmp" -mindepth 2 -maxdepth 2 -type d -name "$SUBPASTA" | head -n1)"
-[ -n "$origem" ] || falha "Não achei a pasta $SUBPASTA no repositório $REPO ($RAMO)."
+if [ -z "$SUBPASTA" ]; then
+  origem="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+else
+  origem="$(find "$tmp" -mindepth 2 -maxdepth 2 -type d -name "$SUBPASTA" | head -n1)"
+fi
+[ -n "$origem" ] && [ -f "$origem/docker-compose.yml" ] || falha "Não achei o agente no repositório $REPO ($RAMO)."
 mkdir -p "$PASTA"
 # .env, conhecimento/ e dados/ não vêm do repositório: suas configurações ficam intactas.
 cp -a "$origem/." "$PASTA/"
