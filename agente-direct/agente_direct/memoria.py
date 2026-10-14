@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS leads (
     atualizado_em REAL
 );
 
+CREATE TABLE IF NOT EXISTS ajustes (
+    chave TEXT PRIMARY KEY,         -- ex.: token renovado do Instagram
+    valor TEXT
+);
+
 CREATE TABLE IF NOT EXISTS enviados (
     mid TEXT PRIMARY KEY            -- mids que o próprio agente enviou (para separar dos ecos humanos)
 );
@@ -76,8 +81,8 @@ class Memoria:
         for linha in reversed(linhas):
             papel, texto = linha["papel"], linha["texto"]
             if papel == "humano":
-                # Resposta que o Edilson mandou à mão pelo app.
-                papel, texto = "assistant", f"[resposta enviada manualmente pelo Edilson] {texto}"
+                # Resposta que o dono da conta mandou à mão pelo app.
+                papel, texto = "assistant", f"[resposta enviada manualmente pelo dono da conta] {texto}"
             if mensagens and mensagens[-1]["role"] == papel:
                 mensagens[-1]["content"] += "\n" + texto
             else:
@@ -85,6 +90,17 @@ class Memoria:
         while mensagens and mensagens[0]["role"] != "user":
             mensagens.pop(0)
         return mensagens
+
+    # --- ajustes (token renovado etc.) ---------------------------------
+    def ajuste(self, chave: str, padrao: str = "") -> str:
+        with self._trava:
+            linha = self._db.execute("SELECT valor FROM ajustes WHERE chave = ?", (chave,)).fetchone()
+        return linha[0] if linha else padrao
+
+    def gravar_ajuste(self, chave: str, valor: str) -> None:
+        with self._trava:
+            self._db.execute("INSERT OR REPLACE INTO ajustes (chave, valor) VALUES (?, ?)", (chave, valor))
+            self._db.commit()
 
     # --- mids enviados pelo agente --------------------------------------
     def marcar_enviado(self, mid: str) -> None:

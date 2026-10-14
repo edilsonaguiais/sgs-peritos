@@ -22,7 +22,7 @@ from .memoria import Memoria
 
 log = logging.getLogger("agente_direct")
 
-# Usada quando a conversa precisa do Edilson e o modelo não escreveu a mensagem de espera
+# Usada quando a conversa precisa do dono da conta e o modelo não escreveu a mensagem de espera
 # (recusa, link bloqueado, teto de mensagens, resposta inválida).
 MENSAGEM_ESPERA = "Essa eu quero te responder com calma, pessoalmente. Me dá um tempinho que eu te retorno aqui mesmo, tá?"
 
@@ -76,8 +76,13 @@ class Orquestrador:
         self._ocupado.add(conversa)
         try:
             await self.responder(conversa)
-        except Exception:
+        except Exception as erro:
             log.exception("Erro ao responder %s", conversa)
+            # Claude fora do ar, chave errada etc.: o lead não fica no vácuo.
+            try:
+                await self.esperar_dono(conversa, f"erro técnico ao responder ({type(erro).__name__}); veja os logs")
+            except Exception:
+                log.exception("Também não consegui pedir para %s aguardar", conversa)
         finally:
             self._ocupado.discard(conversa)
             if conversa in self._pendente:
@@ -107,7 +112,7 @@ class Orquestrador:
             log.info("SANDBOX: ignorando @%s (fora da lista de teste).", usuario or conversa)
             return
         if self.memoria.enviadas_desde(conversa, time.time() - 86400) >= self.cfg.max_msgs_sessao:
-            await self.esperar_edilson(conversa, f"conversa longa: {self.cfg.max_msgs_sessao} mensagens em 24 h")
+            await self.esperar_dono(conversa, f"conversa longa: {self.cfg.max_msgs_sessao} mensagens em 24 h")
             return
 
         hoje = datetime.now(ZoneInfo(self.cfg.fuso)).strftime("%d/%m/%Y")
@@ -124,7 +129,7 @@ class Orquestrador:
                 return  # você assumiu a conversa enquanto o agente pensava
             await self.enviar(conversa, texto)
         if decisao.transferir:
-            await self.esperar_edilson(conversa, decisao.motivo, avisar_lead=not decisao.mensagens)
+            await self.esperar_dono(conversa, decisao.motivo, avisar_lead=not decisao.mensagens)
 
     async def enviar(self, conversa: str, texto: str) -> None:
         for pedaco in dividir(texto):
@@ -134,8 +139,8 @@ class Orquestrador:
             self.memoria.marcar_enviado(mid)
         self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
 
-    async def esperar_edilson(self, conversa: str, motivo: str, avisar_lead: bool = True) -> None:
-        """O agente pede para o lead aguardar, sai da conversa e avisa o Edilson."""
+    async def esperar_dono(self, conversa: str, motivo: str, avisar_lead: bool = True) -> None:
+        """O agente pede para o lead aguardar, sai da conversa e avisa o dono da conta."""
         if avisar_lead and not self.memoria.esta_pausado(conversa):
             await self.enviar(conversa, MENSAGEM_ESPERA)
         self.memoria.atualizar_lead(conversa, transferido=1)
@@ -171,6 +176,26 @@ class Orquestrador:
             enviados += 1
         return enviados
 
+    async def renovar_token_se_preciso(self, agora: float | None = None) -> bool:
+        """Renova o token a cada 7 dias e guarda no banco: ninguém precisa lembrar."""
+        agora = agora or time.time()
+        if agora - float(self.memoria.ajuste("ig_token_renovado_em", "0")) < 7 * 86400:
+            return False
+        dados = await self.ig.renovar_token()
+        self.ig.token = dados["access_token"]
+        self.memoria.gravar_ajuste("ig_token", self.ig.token)
+        self.memoria.gravar_ajuste("ig_token_renovado_em", str(agora))
+        log.info("Token do Instagram renovado (vale mais %s dias).", int(dados.get("expires_in", 0)) // 86400)
+        return True
+
+    async def laco_token(self, intervalo_s: float = 6 * 3600) -> None:
+        while True:
+            try:
+                await self.renovar_token_se_preciso()
+            except Exception:
+                log.exception("Não consegui renovar o token do Instagram; rode `agente-direct verificar`.")
+            await asyncio.sleep(intervalo_s)
+
     async def laco_followup(self, intervalo_s: float = 600) -> None:
         while True:
             try:
@@ -180,10 +205,10 @@ class Orquestrador:
             await asyncio.sleep(intervalo_s)
 
     async def notificar(self, conversa: str, motivo: str) -> None:
-        """Avisa o Edilson que alguém está esperando resposta dele no direct."""
+        """Avisa o dono da conta que alguém está esperando resposta no direct."""
         lead = self.memoria.lead(conversa)
         quem = f"@{lead['username']}" if lead["username"] else conversa
-        log.warning("ESPERANDO O EDILSON %s: %s", quem, motivo)
+        log.warning("ESPERANDO RESPOSTA MANUAL %s: %s", quem, motivo)
         ficha = lead["ficha"] or {}
         texto = (f"📩 {quem} ({lead['nome'] or 'sem nome'}) está esperando sua resposta no direct.\n"
                  f"O que responder: {motivo or 'ver conversa'}\n"
@@ -199,7 +224,7 @@ class Orquestrador:
             if self.cfg.notificar_url:
                 try:
                     await http.post(self.cfg.notificar_url, json={
-                        "evento": "lead_esperando_edilson", "conversa": conversa,
+                        "evento": "lead_esperando_resposta", "conversa": conversa,
                         "username": lead["username"], "nome": lead["nome"],
                         "motivo": motivo, "ficha": lead["ficha"], "texto": texto, "em": time.time(),
                     })
@@ -220,20 +245,30 @@ def criar_app(cfg: Config | None = None, orquestrador: Orquestrador | None = Non
     cfg = cfg or Config.do_ambiente()
     if orquestrador is None:
         memoria = Memoria(cfg.banco)
-        ig = ClienteInstagram(cfg.ig_access_token, cfg.graph_versao, cfg.modo_teste)
-        cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento), cfg.modelo, cfg.esforco,
+        # o token renovado pelo próprio servidor (no banco) vale mais que o do .env,
+        # a não ser que o .env tenha sido trocado depois (agente-direct configurar)
+        token = cfg.ig_access_token
+        if memoria.ajuste("ig_token_origem") == cfg.ig_access_token and memoria.ajuste("ig_token"):
+            token = memoria.ajuste("ig_token")
+        else:
+            memoria.gravar_ajuste("ig_token_origem", cfg.ig_access_token)
+            memoria.gravar_ajuste("ig_token", cfg.ig_access_token)
+            memoria.gravar_ajuste("ig_token_renovado_em", str(time.time()))
+        ig = ClienteInstagram(token, cfg.graph_versao, cfg.modo_teste)
+        cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento, cfg.dono), cfg.modelo, cfg.esforco,
                           links=links_permitidos(cfg.pasta_conhecimento))
         orquestrador = Orquestrador(cfg, memoria, ig, cerebro)
     orq = orquestrador
 
     @contextlib.asynccontextmanager
     async def ciclo(_app):
-        tarefa = asyncio.create_task(orq.laco_followup()) if followup else None
+        tarefas = [asyncio.create_task(orq.laco_followup()),
+                   asyncio.create_task(orq.laco_token())] if followup else []
         yield
-        if tarefa:
+        for tarefa in tarefas:
             tarefa.cancel()
 
-    app = FastAPI(title="Agente Direct — Edilson Aguiais", lifespan=ciclo)
+    app = FastAPI(title=f"Agente Direct — {cfg.dono}", lifespan=ciclo)
     app.state.orquestrador = orq
 
     def _admin(autorizacao: str | None) -> None:
@@ -243,6 +278,24 @@ def criar_app(cfg: Config | None = None, orquestrador: Orquestrador | None = Non
     @app.get("/saude")
     async def saude():
         return {"ok": True, "modelo": cfg.modelo, "modo_teste": cfg.modo_teste}
+
+    @app.get("/privacidade")
+    async def privacidade():
+        """Política de privacidade mínima: a Meta exige uma URL dessas para publicar o app."""
+        return Response(media_type="text/html; charset=utf-8", content=f"""<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Privacidade — {cfg.dono}</title>
+<body style="font-family:sans-serif;max-width:680px;margin:40px auto;padding:0 16px;line-height:1.5">
+<h1>Política de privacidade</h1>
+<p>Este serviço responde mensagens enviadas ao Instagram de {cfg.dono}, com ajuda de
+inteligência artificial. Guardamos o texto das conversas, o nome e o @ do Instagram
+de quem escreve, apenas para continuar o atendimento e oferecer os produtos de {cfg.dono}.</p>
+<p>Os dados não são vendidos nem compartilhados, exceto com os provedores técnicos
+necessários para o funcionamento: Meta (Instagram) e Anthropic (Claude).</p>
+<h2>Exclusão de dados</h2>
+<p>Para apagar seus dados, envie no direct a mensagem "apagar meus dados". O pedido é
+atendido manualmente por {cfg.dono} em até 15 dias.</p>
+</body></html>""")
 
     @app.get("/webhook")
     async def verificar(modo: str = Query("", alias="hub.mode"),

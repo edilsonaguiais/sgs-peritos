@@ -142,10 +142,47 @@ class ClienteInstagram:
             return {}
 
     async def renovar_token(self) -> dict:
-        """Renova o token de longa duração (vale 60 dias; renove antes de vencer)."""
+        """Renova o token de longa duração (vale 60 dias; o servidor renova sozinho toda semana)."""
         resp = await self.http.get(
             "https://graph.instagram.com/refresh_access_token",
             params={"grant_type": "ig_refresh_token", "access_token": self.token},
         )
         resp.raise_for_status()
         return resp.json()
+
+    # --- configuração da conta (usado pelo comando agente-direct) -----------
+    async def conta(self) -> dict:
+        """Confere o token e devolve {user_id, username} da conta profissional."""
+        resp = await self.http.get(f"{self.base}/me", params={
+            "fields": "user_id,username,account_type", "access_token": self.token})
+        if resp.status_code != 200:
+            raise ErroMeta(_mensagem_erro(resp))
+        return resp.json()
+
+    async def inscrever_mensagens(self) -> None:
+        """Liga o envio de DMs desta conta para o webhook do app."""
+        resp = await self.http.post(f"{self.base}/me/subscribed_apps", params={
+            "subscribed_fields": "messages", "access_token": self.token})
+        if resp.status_code != 200 or not resp.json().get("success"):
+            raise ErroMeta(_mensagem_erro(resp))
+
+    async def inscricoes(self) -> list[str]:
+        resp = await self.http.get(f"{self.base}/me/subscribed_apps", params={"access_token": self.token})
+        if resp.status_code != 200:
+            raise ErroMeta(_mensagem_erro(resp))
+        campos: list[str] = []
+        for app in resp.json().get("data", []):
+            campos += app.get("subscribed_fields", [])
+        return campos
+
+
+class ErroMeta(Exception):
+    pass
+
+
+def _mensagem_erro(resp: httpx.Response) -> str:
+    try:
+        erro = resp.json().get("error", {})
+        return f"{erro.get('message', resp.text)} (código {erro.get('code', resp.status_code)})"
+    except ValueError:
+        return f"HTTP {resp.status_code}: {resp.text[:200]}"

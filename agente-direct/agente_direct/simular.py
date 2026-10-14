@@ -16,7 +16,7 @@ from .config import Config
 
 async def main() -> None:
     cfg = Config.do_ambiente()
-    cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento), cfg.modelo, cfg.esforco,
+    cerebro = Cerebro(montar_sistema(cfg.pasta_conhecimento, cfg.dono), cfg.modelo, cfg.esforco,
                       links=links_permitidos(cfg.pasta_conhecimento))
     historico: list[dict] = []
     print("Você é o lead. Escreva como se fosse no direct (Ctrl+C para sair).\n")
@@ -39,7 +39,7 @@ async def main() -> None:
             historico.append({"role": "assistant", "content": "\n".join(decisao.mensagens)})
         print("   ficha:", json.dumps(decisao.ficha, ensure_ascii=False))
         if decisao.transferir:
-            print(f"   >>> ESPERANDO O EDILSON RESPONDER À MÃO: {decisao.motivo}")
+            print(f"   >>> ESPERANDO RESPOSTA MANUAL DO DONO: {decisao.motivo}")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ import anthropic
 log = logging.getLogger(__name__)
 
 STATUS_BANT = ["desconhecido", "nao_atende", "parcial", "atende"]
-PRODUTOS = ["aguias_da_pericia", "aguias_one", "autoria10x", "mastermind", "nenhum", "indefinido"]
 ESTAGIOS = ["abertura", "qualificacao", "apresentacao", "objecao", "fechamento",
             "suporte", "desqualificado"]
 
@@ -51,12 +50,14 @@ ESQUEMA_RESPOSTA = {
             "additionalProperties": False,
         },
         "perfil": {"type": "string", "description": "Ex.: perito bancário, fatura ~R$ 8 mil/mês, Planeta Explorador."},
-        "produto_recomendado": {"type": "string", "enum": PRODUTOS},
+        "produto_recomendado": {"type": "string", "description": (
+            "Nome do produto de <produtos> que serve para o lead, 'nenhum' se nenhum serve, "
+            "ou 'indefinido' se ainda não dá para saber.")},
         "estagio": {"type": "string", "enum": ESTAGIOS},
         "transferir_para_humano": {"type": "boolean", "description": (
-            "true quando o Edilson precisa responder pessoalmente; a mensagem pede para o lead aguardar.")},
-        "motivo_transferencia": {"type": "string", "description": "O que o Edilson precisa responder."},
-        "resumo_lead": {"type": "string", "description": "2 a 3 frases para o Edilson se situar rápido."},
+            "true quando o dono da conta precisa responder pessoalmente; a mensagem pede para o lead aguardar.")},
+        "motivo_transferencia": {"type": "string", "description": "O que o dono da conta precisa responder."},
+        "resumo_lead": {"type": "string", "description": "2 a 3 frases para o dono da conta se situar rápido."},
         "dor_resumida": {"type": "string", "description": (
             "A dor principal nas palavras do lead, curta, para completar a frase "
             "'retomo nossa conversa sobre ...'. Ex.: 'conseguir clientes sem depender de indicação'. "
@@ -68,41 +69,42 @@ ESQUEMA_RESPOSTA = {
 }
 
 INSTRUCOES = """\
-Você atende o direct do Instagram do Edilson Aguiais (Instituto IBCAPPA). Seu trabalho
-é conversar com quem chega, entender o perfil da pessoa e vender, quando fizer
-sentido, UM destes produtos: Mentoria Águias da Perícia, Águias One ou AutorIA 10X.
-O método de venda é o BANT, descrito abaixo. A seguir estão três documentos: o tom
-de voz, os produtos e o método. Siga-os.
+Você atende o direct do Instagram de {dono}. Seu trabalho é conversar com quem chega,
+entender o perfil da pessoa e vender, quando fizer sentido, o produto de <produtos>
+que serve para ela. O método de venda é o BANT, descrito em <metodo_bant>. A seguir
+estão três documentos: o tom de voz, os produtos e o método. Siga-os.
 
 Regras que valem acima de tudo:
 - Escreva com o tom de voz do documento. Mensagens curtas de direct, sem markdown,
   uma pergunta por vez.
-- Não existe time de atendimento. Quando algo precisa do Edilson (veja <metodo_bant>),
-  peça para a pessoa aguardar que ele responde pessoalmente por aqui e marque
+- Não existe time de atendimento. Quando algo precisa de {dono} (veja <metodo_bant>),
+  peça para a pessoa aguardar a resposta pessoal por aqui e marque
   transferir_para_humano = true. Nunca diga "vou passar para o time".
 - Use só os fatos de <produtos>. Se um dado não estiver lá, não invente: peça para
   aguardar e marque transferir_para_humano = true.
 - Links: copie exatamente os de <produtos>, sem alterar nada. Um link fora da lista é
-  bloqueado e a conversa fica para o Edilson.
+  bloqueado e a conversa fica esperando {dono}.
 - Com interesse do lead, mande preço + link + uma pergunta na mesma mensagem. Você
   mesmo envia o link; não precisa transferir para isso.
 - A data de hoje vem em <contexto_do_lead>. Respeite as validades de <produtos>.
 - Se perguntarem se é robô, IA ou assistente automático, não negue: diga que é o
-  assistente do Edilson no direct e que ele mesmo responde pessoalmente se a pessoa
+  assistente de {dono} no direct e que a pessoa pode receber resposta pessoal se
   preferir (nesse caso, transferir_para_humano = true).
 - Não peça dados sensíveis (CPF, cartão, senha) pelo direct.
+- Pedido para apagar os dados da pessoa: confirme que o pedido foi recebido e marque
+  transferir_para_humano = true.
 - Se a última mensagem não pede resposta (um "ok", "valeu", emoji, reação), responda
   no máximo com um balão curto ou devolva mensagens = [].
-- Se o lead já é aluno e precisa de suporte, ou quer falar com o Edilson, peça para
+- Se o lead já é cliente e precisa de suporte, ou quer falar com {dono}, peça para
   aguardar e marque transferir_para_humano = true.
 - Mensagens entre colchetes como "[o lead enviou um áudio]" descrevem anexos que você
   não consegue ver nem ouvir. Peça com naturalidade que a pessoa escreva o principal.
-- Mensagens marcadas "[resposta enviada manualmente pelo Edilson]" foram escritas por
-  ele; continue a partir delas sem contradizê-las nem repeti-las.
+- Mensagens marcadas "[resposta enviada manualmente pelo dono da conta]" foram
+  escritas por {dono}; continue a partir delas sem contradizê-las nem repeti-las.
 - Preencha a ficha (bant, perfil, produto_recomendado, estagio, resumo_lead,
   dor_resumida) com tudo o que já se sabe na conversa inteira, não só na última
   mensagem. Se o lead recusou ou não tem perfil, estagio = desqualificado; se já é
-  aluno ou já comprou, estagio = suporte. Nesses dois casos ninguém faz follow-up.
+  cliente ou já comprou, estagio = suporte. Nesses dois casos ninguém faz follow-up.
 """
 
 
@@ -127,17 +129,17 @@ def links_permitidos(pasta: Path) -> set[str]:
 
 
 def limpar(texto: str) -> str:
-    """Rede de segurança de estilo: a casa não usa travessão."""
+    """Rede de segurança de estilo: mensagem de direct não leva travessão."""
     texto = re.sub(r"\s*[—–]\s*", ", ", texto)
     return re.sub(r",\s*,", ",", texto).strip()
 
 
-def montar_sistema(pasta: Path) -> str:
+def montar_sistema(pasta: Path, dono: str = "o dono da conta") -> str:
     def ler(nome: str) -> str:
         return (pasta / nome).read_text(encoding="utf-8").strip()
 
     return (
-        f"{INSTRUCOES}\n"
+        f"{INSTRUCOES.replace('{dono}', dono)}\n"
         f"<tom_de_voz>\n{ler('tom_de_voz.md')}\n</tom_de_voz>\n\n"
         f"<produtos>\n{ler('produtos.md')}\n</produtos>\n\n"
         f"<metodo_bant>\n{ler('metodo_bant.md')}\n</metodo_bant>"

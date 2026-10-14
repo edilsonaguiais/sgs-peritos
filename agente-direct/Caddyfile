@@ -1,0 +1,10 @@
+# Só passa o que a Meta e você precisam; todo o resto responde 404.
+{$DOMINIO:localhost} {
+	@liberado path /webhook /saude /privacidade /leads /leads/*
+	handle @liberado {
+		reverse_proxy agente:8000
+	}
+	handle {
+		respond 404
+	}
+}

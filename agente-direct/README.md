@@ -1,188 +1,157 @@
-# Agente Direct — vendas no Instagram com BANT
+# Agente Direct
 
-Agente que atende o direct do Instagram do Edilson Aguiais com o tom de voz dele,
-qualifica o lead pelo método BANT e vende o produto certo para o perfil:
-**Mentoria Águias da Perícia**, **Águias One** ou **AutorIA 10X**.
+Um agente de IA que atende o direct do seu Instagram com o seu jeito de escrever,
+descobre o perfil de quem chegou (método BANT) e vende o produto certo, mandando
+preço e link de compra. Quando a pergunta precisa de você, ele pede para a pessoa
+aguardar e te avisa no Telegram.
 
-A conexão é a **oficial da Meta** (Instagram API com login do Instagram, webhooks
-e Send API). Não usa senha, automação de navegador nem ferramenta não oficial, então
-não coloca a conta em risco de bloqueio.
+Usa a **API oficial da Meta** (sem senha, sem robô de navegador, sem risco de
+bloqueio) e o **Claude** como cérebro. Cada pessoa instala no próprio servidor, com o
+próprio app da Meta: não depende de ninguém e não precisa de aprovação da Meta para
+atender a própria conta.
 
-## Como funciona
+## O que você precisa
 
-```
-Lead manda DM ──► Meta (webhook) ──► /webhook deste servidor
-                                         │ espera ~8 s o lead terminar de digitar
-                                         ▼
-                              Claude lê: tom de voz + produtos + BANT + conversa
-                                         │
-                       ┌─────────────────┴──────────────────┐
-                       ▼                                    ▼
-          responde no direct (1 a 3 balões)     atualiza a ficha BANT do lead
-                                                 e, se precisar, pede para aguardar você
-```
-
-- **Tom de voz, produtos e método** ficam em `conhecimento/` como texto simples. Para
-  mudar o que o agente fala, edite esses arquivos e reinicie. Não precisa mexer em código.
-- **Você assume quando quiser.** Se você responder um lead pelo app do Instagram, o
-  agente percebe e sai daquela conversa por 24 h (`PAUSA_HUMANO_HORAS`).
-- **O próprio agente fecha.** Com interesse, ele manda preço + link da EduQ + uma
-  pergunta, como no método Damásio. Não segura o link nem força call.
-- **Não existe time: quem responde é você.** Quando o lead pede desconto ou a
-  garantia da Águias, quer falar com você, é aluno com problema, ou pergunta algo que
-  não está em `produtos.md`, o agente pede para a pessoa aguardar ("me dá um tempinho
-  que eu te retorno aqui mesmo"), sai da conversa e te avisa no Telegram
-  (`TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID`). Você responde à mão pelo app do Instagram;
-  24 h depois da sua resposta, a conversa volta para o agente.
-- **Ficha do lead.** A cada resposta o agente grava a situação de Budget, Authority,
-  Need e Timing, o perfil, o produto recomendado, o estágio e um resumo para você se situar rápido.
-  Consulte em `GET /leads`.
-- **Honestidade.** Se perguntarem se é robô, ele não nega: diz que é o assistente do
-  Edilson e oferece chamar alguém.
-
-## De onde vêm preço, links e regras
-
-`conhecimento/produtos.md` foi montado a partir dos repositórios de vendas
-(`mentoria-aguias-one/vendas`, `mentoria-aguias-da-pericia/vendas`,
-`unibcappa-produtos/mentoria/02-autoria-10x`), que espelham o Dropbox. Os dados
-vigentes em 14/10/2026 são estes:
-
-| Produto | Preço no direct (fora do evento) | Matrícula EduQ |
+| Item | Onde conseguir | Custo aproximado |
 |---|---|---|
-| Águias ONE | 12x R$ 1.500 ou R$ 15.000 | https://go.eduq.tec.br/r/8df263aed54d460 (processo 232) |
-| Águias da Perícia | 12x R$ 4.000 ou R$ 45.000 | https://go.eduq.tec.br/r/8df26455d32e839 (processo 237) |
-| AutorIA 10X Autor Digital | R$ 2.996,40 | https://inscricao.eduqtecnologia.com.br/detalhes/218?dominio=ibcappa |
-| AutorIA 10X Legado Profissional | R$ 5.964,00 | https://inscricao.eduqtecnologia.com.br/detalhes/219?dominio=ibcappa |
-| AutorIA 10X Autoridade Black | R$ 17.964,00 (só com você) | https://inscricao.eduqtecnologia.com.br/detalhes/220?dominio=ibcappa |
+| Conta do Instagram **profissional** (Empresa ou Criador) | App do Instagram > Configurações > Tipo de conta | grátis |
+| Conta de desenvolvedor da Meta | <https://developers.facebook.com> | grátis |
+| Chave da API do Claude | <https://console.anthropic.com> > API Keys | por uso |
+| Um servidor Linux (Ubuntu ou Debian), 1 GB de RAM | qualquer VPS: Hostinger, Contabo, DigitalOcean, Hetzner… | ~US$ 5/mês |
+| Domínio próprio (opcional) | se não tiver, o instalador usa um endereço grátis `*.sslip.io` | |
+| Bot do Telegram (opcional) | @BotFather no Telegram | grátis |
 
-O agente também segue as regras dos playbooks: método Damásio (com interesse, manda
-preço + link + uma pergunta), preço do III Encontro nunca no direct, parcelado
-primeiro, sem desconto, "mentoria que certifica como pós-graduação" (nunca "é uma
-pós", nunca "MEC"), garantia do Águias bloqueada até conferir o contrato.
+## Instalação em 4 passos
 
-**Quando o preço ou o link mudar, mude `produtos.md` e reinicie.** O agente só
-consegue enviar links que estão nesse arquivo. Qualquer outro link, inclusive os de
-preço de evento, é bloqueado antes de sair, e a conversa fica esperando você.
+### 1. Crie o app na Meta (10 minutos, uma vez só)
+Siga o [GUIA-META.md](GUIA-META.md). No fim você terá um **token de acesso** e a
+**chave secreta do app**.
 
-## Freios
+### 2. Rode um comando no servidor
+Entre no servidor por SSH e cole:
 
-| Freio | Variável | Padrão |
+```bash
+curl -fsSL https://raw.githubusercontent.com/edilsonaguiais/sgs-peritos/claude/agente-direct-instagram/agente-direct/instalar.sh | sudo bash
+```
+
+O instalador:
+1. instala o Docker, se precisar;
+2. baixa o agente para `/opt/agente-direct`;
+3. pergunta as chaves (Claude, Instagram, Telegram) e **confere cada uma na hora**;
+4. sobe o servidor com HTTPS automático;
+5. mostra a URL e o token que você cola no painel da Meta e liga as mensagens da
+   sua conta.
+
+### 3. Ensine o agente
+Ele aprende com 3 arquivos de texto, na pasta `conhecimento/`:
+
+| Arquivo | O que vai nele | Comando |
 |---|---|---|
-| Agrupa mensagens quebradas do lead | `ESPERA_AGRUPAR_S` | 8 s |
-| Sai da conversa quando você responde pelo app | `PAUSA_HUMANO_HORAS` | 24 h |
-| Teto de mensagens do agente por conversa em 24 h (no teto, pede para aguardar você) | `MAX_MSGS_SESSAO` | 15 |
-| Pessoas que o agente nunca atende (sócios, família, equipe) | `BLOQUEADOS` | vazio |
-| Fase de teste: só atende estes @ | `SANDBOX` | vazio (todos) |
-| Um follow-up (copy do `/sumiu1`) se o lead sumir, dentro da janela de 24 h, entre 8h e 21h | `FOLLOWUP_APOS_H` | 20 h |
-| Sem travessão e sem link fora da lista | (sempre ligado) | |
+| `tom_de_voz.md` | como você escreve: saudação, expressões, o que você nunca faz | `agente-direct editar tom_de_voz.md` |
+| `produtos.md` | o que você vende: para quem é, preço, link de compra | `agente-direct editar produtos.md` |
+| `metodo_bant.md` | como conduzir a venda e quando deixar para você | `agente-direct editar metodo_bant.md` |
 
-O Instagram só entrega mensagem até 24 h depois da última fala do lead. Por isso o
-`/sumiu2` do playbook (dia 3) não existe no direct: o agente faz um único toque.
-
-> Este agente atende o Instagram **pessoal** do Edilson. A Sofia (SellFlux) segue no
-> Instagram da empresa; os dois não se cruzam.
-
-## Passo a passo da conexão oficial
-
-### 1. Conta do Instagram
-A conta precisa ser **profissional** (Empresa ou Criador de conteúdo). No app do
-Instagram: *Configurações → Mensagens e respostas a stories → Controles de mensagens
-→ Ferramentas conectadas → Permitir acesso a mensagens* (ative).
-
-### 2. App na Meta
-1. Em <https://developers.facebook.com/apps>, clique em **Criar app** e escolha o tipo
-   **Empresa**.
-2. Adicione o produto **Instagram** e abra **Configuração da API com login do Instagram**.
-3. Em **Gerar tokens de acesso**, adicione a sua conta e faça login. Copie:
-   - o **token** → `IG_ACCESS_TOKEN`;
-   - o **ID da conta do Instagram** → `IG_USER_ID`.
-4. Na mesma tela, copie a **Chave secreta do app do Instagram** → `IG_APP_SECRET`.
-
-### 3. Servidor no ar (HTTPS)
-O agente precisa ficar ligado 24 h num servidor seu (a sessão do Claude Code na nuvem
-é temporária e não pode ficar recebendo mensagens). Serve a sua VPS com Caddy e PM2,
-como no método do clone SDR: um subdomínio só para o webhook, liberando apenas
-`GET /saude` e `POST /webhook`.
-
-A Meta só entrega mensagens a uma URL pública com HTTPS. Qualquer uma destas opções
-serve: Render, Railway, Fly.io ou uma VPS.
+Os arquivos já vêm com um modelo para preencher. Para o tom de voz tem atalho: junte
+de 20 a 50 textos seus (legendas, respostas de direct, transcrições de vídeo) num
+arquivo, coloque em `/opt/agente-direct/conhecimento/textos.txt` e rode:
 
 ```bash
-cd agente-direct
-cp .env.example .env        # preencha as chaves
-pip install -r requirements.txt
-uvicorn agente_direct.app:app --host 0.0.0.0 --port 8000 --workers 1
+agente-direct gerar-tom textos.txt
 ```
 
-Ou com Docker: `docker build -t agente-direct . && docker run --env-file .env -p 8000:8000 -v $PWD/dados:/app/dados agente-direct`
+O Claude escreve um rascunho (`tom_de_voz.rascunho.md`) para você revisar.
 
-> Use **um worker só** (`--workers 1`). O agrupamento das mensagens fica na memória do processo.
+Tem um exemplo completo e real em [`exemplos/edilson-aguiais/`](exemplos/edilson-aguiais),
+com três mentorias, preços, links e regras de venda.
 
-### 4. Webhook
-No painel do app, em **Configurar webhooks**:
-- **URL de callback:** `https://SEU-DOMINIO/webhook`
-- **Token de verificação:** o mesmo texto que você colocou em `IG_VERIFY_TOKEN`
-- Clique em **Verificar e salvar** e depois assine o campo **messages**.
+> **Segurança dos links:** o agente só consegue enviar links que estão em
+> `produtos.md`. Qualquer outro é bloqueado antes de sair.
 
-### 5. Teste em modo desenvolvimento
-Com o app em modo desenvolvimento, o agente só responde contas que têm função no app
-(*Funções do app → Testadores do Instagram*). Coloque essas contas em `SANDBOX`, mande
-uma DM e acompanhe o log. Para testar sem enviar nada de verdade, use `MODO_TESTE=1`.
-Antes de abrir para todos, leia 10 conversas de teste e só libere se você assinaria
-todas as respostas.
-
-### 6. Liberar para todos os leads (App Review)
-Para atender qualquer pessoa, a Meta exige:
-1. **Verificação da empresa** (Business Manager);
-2. **URL da política de privacidade** nas configurações do app;
-3. **Análise do app** pedindo *acesso avançado* para `instagram_business_basic` e
-   `instagram_business_manage_messages`, com um vídeo curto mostrando o agente
-   respondendo uma DM;
-4. Depois da aprovação, mudar o app para o modo **Ativo**.
-
-A aprovação costuma levar de alguns dias a algumas semanas.
-
-### 7. Renovar o token
-O token vale 60 dias. Rode todo mês e atualize `IG_ACCESS_TOKEN`:
+### 4. Teste e libere
 ```bash
-python -m agente_direct.renovar_token
+agente-direct testar      # converse com o agente no terminal, sem Instagram
+agente-direct verificar   # checklist de tudo: chaves, conhecimento, servidor, webhook
 ```
+Depois mande uma DM de **outra** conta para a sua e acompanhe com
+`agente-direct logs`. Leia as 10 primeiras conversas reais antes de divulgar: só
+libere se você assinaria todas as respostas.
 
-## Testar o agente sem o Instagram
+## Comandos do dia a dia
 
-Converse com ele no terminal. Isso só precisa de `ANTHROPIC_API_KEY` no `.env`:
-```bash
-python -m agente_direct.simular
-```
-Faça o papel de leads diferentes, como um perito iniciante, um perito que fatura
-R$ 15 mil por mês, um contador que quer escrever um livro ou alguém que só pergunta
-o preço. Ajuste `conhecimento/` até o tom ficar do seu jeito.
-
-## Consultar e controlar os leads
-
-Todas as rotas pedem o cabeçalho `Authorization: Bearer <ADMIN_TOKEN>`.
-
-| Rota | O que faz |
+| Comando | O que faz |
 |---|---|
-| `GET /leads` | Lista os leads com a ficha BANT e o produto recomendado |
-| `GET /leads/{id}` | Mostra um lead com o histórico completo |
-| `POST /leads/{id}/pausar?horas=N` | Tira o agente da conversa |
-| `POST /leads/{id}/retomar` | Devolve a conversa ao agente depois de uma transferência |
+| `agente-direct logs` | mostra as conversas acontecendo |
+| `agente-direct editar produtos.md` | muda preço, link ou produto (reinicia sozinho) |
+| `agente-direct verificar` | diz o que está funcionando e o que falta |
+| `agente-direct configurar` | troca uma chave (o resto fica como está) |
+| `agente-direct reiniciar` / `parar` | liga e desliga |
+| `agente-direct atualizar` | baixa a versão nova, mantendo suas configurações e conversas |
 
-## Regras da Meta que o agente já respeita
-- Só responde dentro da **janela de 24 h** depois da última mensagem do lead. Ele
-  responde sempre a uma mensagem recebida, então nunca inicia conversa.
-- Cada mensagem tem até 1000 caracteres. As mais longas são quebradas automaticamente.
-- Áudios, imagens e respostas a stories chegam como descrição, e o agente pede que a
-  pessoa escreva o principal.
+## Como o agente se comporta
 
-## Custo
-Cada resposta é uma chamada ao Claude (`claude-opus-5-5`, esforço `medium`). O prompt
-fixo fica em cache, então o custo fica em poucos centavos de dólar por resposta. Para
-gastar menos, use `ESFORCO=low` ou `MODELO=claude-sonnet-5-5`.
+- **Fala como você.** Mensagens curtas, uma pergunta por vez, sem markdown.
+- **Vende com BANT.** Descobre Necessidade, Momento, quem Decide e Orçamento ao longo
+  da conversa. Quando há interesse, manda preço + link + uma pergunta.
+- **Não inventa.** Só usa o que está em `produtos.md`. Se não sabe, pede para a pessoa
+  aguardar e te avisa.
+- **Você assume quando quiser.** Respondeu um lead pelo app do Instagram? O agente sai
+  daquela conversa por 24 horas.
+- **Não deixa ninguém no vácuo.** Se o Claude falhar ou a conversa ficar longa demais,
+  o lead recebe "me dá um tempinho que eu te retorno" e você recebe o aviso.
+- **É honesto.** Se perguntarem se é robô, ele diz que é seu assistente.
+- **Um follow-up só.** Se o lead sumir, manda um toque cerca de 20 horas depois, entre
+  8h e 21h. O Instagram não deixa mandar mensagem depois de 24 horas da última fala do
+  lead, então não existe segundo toque.
+- **Renova o token sozinho.** O token da Meta vence em 60 dias; o servidor renova toda
+  semana.
 
-## Desenvolvimento
+## Freios (no arquivo `/opt/agente-direct/.env`)
+
+| Variável | Para quê | Padrão |
+|---|---|---|
+| `SANDBOX` | fase de teste: só atende estes @, separados por vírgula | vazio (todos) |
+| `BLOQUEADOS` | @ que o agente nunca atende (família, sócios, equipe) | vazio |
+| `MAX_MSGS_SESSAO` | teto de mensagens do agente por conversa em 24 h | 15 |
+| `PAUSA_HUMANO_HORAS` | quanto tempo ele fica fora depois que você responde | 24 |
+| `FOLLOWUP_APOS_H` | horas até o follow-up | 20 |
+| `ESFORCO` | `low` gasta menos, `high` pensa mais | `medium` |
+| `MODELO` | modelo do Claude | `claude-opus-5-5` |
+| `MODO_TESTE` | `1` = não envia nada ao Instagram, só mostra no log | `0` |
+
+Depois de editar o `.env`, rode `agente-direct reiniciar`.
+
+## Painel de leads
+
+Cada conversa gera uma ficha com o BANT, o produto recomendado e um resumo. Consulte
+com a senha `ADMIN_TOKEN` que está no `.env`:
+
+```bash
+curl -H "Authorization: Bearer SUA_SENHA" https://SEU_DOMINIO/leads
+```
+
+## Custo do Claude
+Cada resposta é uma chamada ao Claude. O texto fixo (tom, produtos, método) fica em
+cache, então o custo fica em poucos centavos de dólar por resposta. Para gastar menos,
+use `ESFORCO=low` ou `MODELO=claude-sonnet-5-5`.
+
+## Problemas comuns
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `verificar` diz que o servidor não está no ar | domínio não aponta para o IP, ou portas 80/443 fechadas | confira o DNS e o firewall do provedor da VPS |
+| Meta não aceita o webhook ("Verificar e salvar" falha) | token de verificação diferente | copie de novo o que o `conectar` mostrou |
+| Mensagens das contas de teste chegam, de estranhos não | app em modo de desenvolvimento | publique o app (modo Ativo), veja o GUIA-META |
+| Nada chega | acesso a mensagens desligado no app do Instagram | Configurações > Mensagens > Ferramentas conectadas > Permitir acesso |
+| Agente parou de responder um lead | ele pediu para aguardar você | responda pelo app; 24 h depois ele volta |
+
+## Para desenvolvedores
+
 ```bash
 pip install -r requirements.txt pytest
 python -m pytest -q
+python -m agente_direct --help
 ```
+
+Estrutura: `agente_direct/` (código), `modelos/conhecimento/` (modelo em branco),
+`exemplos/` (conhecimento de exemplo), `instalar.sh` (instalador),
+`docker-compose.yml` + `Caddyfile` (servidor com HTTPS automático).

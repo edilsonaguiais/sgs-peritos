@@ -1,0 +1,27 @@
+# Sobe o agente e o Caddy (HTTPS automático). Use pelo comando `agente-direct`.
+services:
+  agente:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./.env:/app/.env
+      - ./conhecimento:/app/conhecimento
+      - ./dados:/app/dados
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_dados:/data
+    depends_on:
+      - agente
+
+volumes:
+  caddy_dados:

@@ -129,7 +129,7 @@ def test_eco_do_agente_e_ignorado_e_resposta_humana_pausa():
     orq, enviados = asyncio.run(cenario())
     assert len(enviados) == 1
     hist = orq.memoria.historico(LEAD)
-    assert "[resposta enviada manualmente pelo Edilson]" in hist[1]["content"]
+    assert "[resposta enviada manualmente pelo dono da conta]" in hist[1]["content"]
 
 
 def test_transferencia_para_humano_desliga_agente():
@@ -162,7 +162,7 @@ def test_dividir_respeita_limite_de_bytes():
 
 
 def test_prompt_inclui_os_tres_documentos():
-    sistema = montar_sistema(RAIZ / "conhecimento")
+    sistema = montar_sistema(RAIZ / "exemplos" / "edilson-aguiais")
     for marca in ("<tom_de_voz>", "<produtos>", "<metodo_bant>", "ÁGUIAS ONE", "AutorIA 10X", "8df263aed54d460"):
         assert marca in sistema
 
@@ -207,7 +207,7 @@ def _resposta_claude(mensagens, **extra):
 
 
 def test_links_oficiais_estao_na_lista_permitida():
-    links = links_permitidos(RAIZ / "conhecimento")
+    links = links_permitidos(RAIZ / "exemplos" / "edilson-aguiais")
     assert "https://go.eduq.tec.br/r/8df263aed54d460" in links      # ONE fora do evento
     assert "https://go.eduq.tec.br/r/8df26455d32e839" in links      # Águias fora do evento
     assert "https://inscricao.eduqtecnologia.com.br/detalhes/218?dominio=ibcappa" in links
@@ -216,7 +216,7 @@ def test_links_oficiais_estao_na_lista_permitida():
 
 
 def test_link_nao_autorizado_e_bloqueado_e_transfere():
-    links = links_permitidos(RAIZ / "conhecimento")
+    links = links_permitidos(RAIZ / "exemplos" / "edilson-aguiais")
     cliente = _resposta_claude(["Segue o link: https://go.eduq.tec.br/r/8df2639b988a75a"])
     cerebro = Cerebro("sistema", cliente=cliente, links=links)
     d = asyncio.run(cerebro.decidir([{"role": "user", "content": "quero o link"}]))
@@ -224,7 +224,7 @@ def test_link_nao_autorizado_e_bloqueado_e_transfere():
 
 
 def test_link_oficial_passa_mesmo_com_pontuacao():
-    links = links_permitidos(RAIZ / "conhecimento")
+    links = links_permitidos(RAIZ / "exemplos" / "edilson-aguiais")
     texto = "São 12x de R$ 1.500. Matrícula: https://go.eduq.tec.br/r/8df263aed54d460. Faz sentido para você?"
     cerebro = Cerebro("sistema", cliente=_resposta_claude([texto]), links=links)
     d = asyncio.run(cerebro.decidir([{"role": "user", "content": "quanto custa?"}]))
@@ -336,3 +336,48 @@ def test_resposta_manual_devolve_conversa_ao_agente_depois_da_pausa():
 
     lead = asyncio.run(cenario())
     assert lead["transferido"] == 0 and lead["pausado_ate"] > 0  # pausado agora, volta sozinho depois
+
+
+def test_erro_no_claude_pede_para_aguardar():
+    class CerebroQuebrado:
+        async def decidir(self, historico, contexto_lead=""):
+            raise RuntimeError("Claude fora do ar")
+
+    async def cenario():
+        _, orq, enviados = montar(CerebroQuebrado())
+        for ev in extrair_eventos(payload("oi", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        for ev in extrair_eventos(payload("alô?", "m2"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert enviados == [MENSAGEM_ESPERA]          # uma vez só, não repete
+    assert orq.memoria.lead(LEAD)["transferido"] == 1
+
+
+# --- comando agente-direct -------------------------------------------------
+import agente_direct.__main__ as cli
+
+
+def test_env_ida_e_volta(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "ENV", tmp_path / ".env")
+    cli.gravar_env({"DONO_NOME": "Maria Silva", "IG_ACCESS_TOKEN": "abc=123", "EXTRA": "x"})
+    lido = cli.ler_env()
+    assert lido["DONO_NOME"] == "Maria Silva" and lido["IG_ACCESS_TOKEN"] == "abc=123"
+    assert lido["MODELO"] == "claude-opus-5-5" and lido["EXTRA"] == "x"
+
+
+def test_detecta_modelo_nao_preenchido():
+    assert cli.placeholders(RAIZ / "modelos" / "conhecimento")            # modelo em branco: tem [SEU NOME] etc.
+    assert cli.placeholders(RAIZ / "exemplos" / "edilson-aguiais") == []  # exemplo pronto: nada pendente
+
+
+def test_preparar_conhecimento_copia_modelo(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "CONHECIMENTO", tmp_path / "conhecimento")
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    cli.preparar_conhecimento()
+    for nome in cli.ARQUIVOS:
+        assert (tmp_path / "conhecimento" / nome).exists()

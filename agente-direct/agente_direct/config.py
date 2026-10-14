@@ -1,4 +1,4 @@
-"""Configuração lida de variáveis de ambiente (veja .env.example)."""
+"""Configuração lida do arquivo .env (criado por `agente-direct configurar`)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ def _carregar_dotenv(caminho: Path) -> None:
 
 @dataclass(frozen=True)
 class Config:
+    # Quem é o dono da conta (como o agente se refere a ele)
+    dono: str = "o dono da conta"
+
     # Instagram (API oficial da Meta — Instagram API com login do Instagram)
     ig_access_token: str = ""
     ig_app_secret: str = ""
@@ -61,6 +64,7 @@ class Config:
         _carregar_dotenv(RAIZ / ".env")
         e = os.environ.get
         return cls(
+            dono=e("DONO_NOME", "o dono da conta"),
             ig_access_token=e("IG_ACCESS_TOKEN", ""),
             ig_app_secret=e("IG_APP_SECRET", ""),
             ig_verify_token=e("IG_VERIFY_TOKEN", ""),
