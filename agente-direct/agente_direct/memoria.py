@@ -76,8 +76,8 @@ class Memoria:
         for linha in reversed(linhas):
             papel, texto = linha["papel"], linha["texto"]
             if papel == "humano":
-                # Resposta que você mandou à mão: o agente vê como fala do lado da empresa.
-                papel, texto = "assistant", f"[resposta enviada manualmente pela equipe] {texto}"
+                # Resposta que o Edilson mandou à mão pelo app.
+                papel, texto = "assistant", f"[resposta enviada manualmente pelo Edilson] {texto}"
             if mensagens and mensagens[-1]["role"] == papel:
                 mensagens[-1]["content"] += "\n" + texto
             else:

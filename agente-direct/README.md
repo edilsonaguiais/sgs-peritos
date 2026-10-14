@@ -19,7 +19,7 @@ Lead manda DM ──► Meta (webhook) ──► /webhook deste servidor
                        ┌─────────────────┴──────────────────┐
                        ▼                                    ▼
           responde no direct (1 a 3 balões)     atualiza a ficha BANT do lead
-                                                 e, se for hora, passa para humano
+                                                 e, se precisar, pede para aguardar você
 ```
 
 - **Tom de voz, produtos e método** ficam em `conhecimento/` como texto simples. Para
@@ -28,12 +28,14 @@ Lead manda DM ──► Meta (webhook) ──► /webhook deste servidor
   agente percebe e sai daquela conversa por 24 h (`PAUSA_HUMANO_HORAS`).
 - **O próprio agente fecha.** Com interesse, ele manda preço + link da EduQ + uma
   pergunta, como no método Damásio. Não segura o link nem força call.
-- **Transferência para humano.** Quando o lead pede desconto ou a garantia do Águias,
-  quer falar com você, é aluno com problema, ou pergunta algo que não está em
-  `produtos.md`, o agente faz a ponte, para de responder e avisa em `NOTIFICAR_URL`
-  (Make, Zapier, n8n ou Slack).
+- **Não existe time: quem responde é você.** Quando o lead pede desconto ou a
+  garantia da Águias, quer falar com você, é aluno com problema, ou pergunta algo que
+  não está em `produtos.md`, o agente pede para a pessoa aguardar ("me dá um tempinho
+  que eu te retorno aqui mesmo"), sai da conversa e te avisa no Telegram
+  (`TELEGRAM_TOKEN` + `TELEGRAM_CHAT_ID`). Você responde à mão pelo app do Instagram;
+  24 h depois da sua resposta, a conversa volta para o agente.
 - **Ficha do lead.** A cada resposta o agente grava a situação de Budget, Authority,
-  Need e Timing, o perfil, o produto recomendado, o estágio e um resumo para o time.
+  Need e Timing, o perfil, o produto recomendado, o estágio e um resumo para você se situar rápido.
   Consulte em `GET /leads`.
 - **Honestidade.** Se perguntarem se é robô, ele não nega: diz que é o assistente do
   Edilson e oferece chamar alguém.
@@ -51,7 +53,7 @@ vigentes em 14/10/2026 são estes:
 | Águias da Perícia | 12x R$ 4.000 ou R$ 45.000 | https://go.eduq.tec.br/r/8df26455d32e839 (processo 237) |
 | AutorIA 10X Autor Digital | R$ 2.996,40 | https://inscricao.eduqtecnologia.com.br/detalhes/218?dominio=ibcappa |
 | AutorIA 10X Legado Profissional | R$ 5.964,00 | https://inscricao.eduqtecnologia.com.br/detalhes/219?dominio=ibcappa |
-| AutorIA 10X Autoridade Black | R$ 17.964,00 (passa pelo time) | https://inscricao.eduqtecnologia.com.br/detalhes/220?dominio=ibcappa |
+| AutorIA 10X Autoridade Black | R$ 17.964,00 (só com você) | https://inscricao.eduqtecnologia.com.br/detalhes/220?dominio=ibcappa |
 
 O agente também segue as regras dos playbooks: método Damásio (com interesse, manda
 preço + link + uma pergunta), preço do III Encontro nunca no direct, parcelado
@@ -60,7 +62,7 @@ pós", nunca "MEC"), garantia do Águias bloqueada até conferir o contrato.
 
 **Quando o preço ou o link mudar, mude `produtos.md` e reinicie.** O agente só
 consegue enviar links que estão nesse arquivo. Qualquer outro link, inclusive os de
-preço de evento, é bloqueado antes de sair, e a conversa vai para o time.
+preço de evento, é bloqueado antes de sair, e a conversa fica esperando você.
 
 ## Freios
 
@@ -68,7 +70,7 @@ preço de evento, é bloqueado antes de sair, e a conversa vai para o time.
 |---|---|---|
 | Agrupa mensagens quebradas do lead | `ESPERA_AGRUPAR_S` | 8 s |
 | Sai da conversa quando você responde pelo app | `PAUSA_HUMANO_HORAS` | 24 h |
-| Teto de mensagens do agente por conversa em 24 h (no teto, passa para o time) | `MAX_MSGS_SESSAO` | 15 |
+| Teto de mensagens do agente por conversa em 24 h (no teto, pede para aguardar você) | `MAX_MSGS_SESSAO` | 15 |
 | Pessoas que o agente nunca atende (sócios, família, equipe) | `BLOQUEADOS` | vazio |
 | Fase de teste: só atende estes @ | `SANDBOX` | vazio (todos) |
 | Um follow-up (copy do `/sumiu1`) se o lead sumir, dentro da janela de 24 h, entre 8h e 21h | `FOLLOWUP_APOS_H` | 20 h |
@@ -77,9 +79,8 @@ preço de evento, é bloqueado antes de sair, e a conversa vai para o time.
 O Instagram só entrega mensagem até 24 h depois da última fala do lead. Por isso o
 `/sumiu2` do playbook (dia 3) não existe no direct: o agente faz um único toque.
 
-> **Atenção, Sofia:** a Sofia (SellFlux, política 40838) já vende o ONE. Se ela
-> estiver ligada ao mesmo Instagram, desligue um dos dois nesse canal. Dois agentes
-> na mesma caixa respondem em dobro.
+> Este agente atende o Instagram **pessoal** do Edilson. A Sofia (SellFlux) segue no
+> Instagram da empresa; os dois não se cruzam.
 
 ## Passo a passo da conexão oficial
 
@@ -98,6 +99,11 @@ Instagram: *Configurações → Mensagens e respostas a stories → Controles de
 4. Na mesma tela, copie a **Chave secreta do app do Instagram** → `IG_APP_SECRET`.
 
 ### 3. Servidor no ar (HTTPS)
+O agente precisa ficar ligado 24 h num servidor seu (a sessão do Claude Code na nuvem
+é temporária e não pode ficar recebendo mensagens). Serve a sua VPS com Caddy e PM2,
+como no método do clone SDR: um subdomínio só para o webhook, liberando apenas
+`GET /saude` e `POST /webhook`.
+
 A Meta só entrega mensagens a uma URL pública com HTTPS. Qualquer uma destas opções
 serve: Render, Railway, Fly.io ou uma VPS.
 

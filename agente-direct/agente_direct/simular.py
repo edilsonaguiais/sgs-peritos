@@ -39,7 +39,7 @@ async def main() -> None:
             historico.append({"role": "assistant", "content": "\n".join(decisao.mensagens)})
         print("   ficha:", json.dumps(decisao.ficha, ensure_ascii=False))
         if decisao.transferir:
-            print(f"   >>> TRANSFERIR PARA HUMANO: {decisao.motivo}")
+            print(f"   >>> ESPERANDO O EDILSON RESPONDER À MÃO: {decisao.motivo}")
 
 
 if __name__ == "__main__":

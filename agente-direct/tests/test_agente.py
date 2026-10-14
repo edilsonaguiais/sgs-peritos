@@ -129,7 +129,7 @@ def test_eco_do_agente_e_ignorado_e_resposta_humana_pausa():
     orq, enviados = asyncio.run(cenario())
     assert len(enviados) == 1
     hist = orq.memoria.historico(LEAD)
-    assert "[resposta enviada manualmente pela equipe]" in hist[1]["content"]
+    assert "[resposta enviada manualmente pelo Edilson]" in hist[1]["content"]
 
 
 def test_transferencia_para_humano_desliga_agente():
@@ -186,7 +186,7 @@ from zoneinfo import ZoneInfo
 
 import httpx2
 
-from agente_direct.app import texto_followup
+from agente_direct.app import MENSAGEM_ESPERA, texto_followup
 from agente_direct.cerebro import Cerebro, limpar, links_permitidos
 
 
@@ -260,7 +260,8 @@ def test_teto_de_mensagens_passa_para_humano():
         return orq, enviados
 
     orq, enviados = asyncio.run(cenario())
-    assert len(enviados) == 1
+    assert len(enviados) == 2
+    assert enviados[-1] == MENSAGEM_ESPERA
     assert orq.memoria.lead(LEAD)["transferido"] == 1
 
 
@@ -307,3 +308,31 @@ def test_followup_respeita_silencio_noturno():
 
 def test_texto_followup_sem_nome_e_sem_dor():
     assert texto_followup(None, "") == "Retomo nossa conversa. Ficou algum ponto sem resposta para você decidir?"
+
+
+def test_sem_mensagem_do_modelo_pede_para_aguardar():
+    async def cenario():
+        _, orq, enviados = montar(CerebroFalso([], transferir=True))
+        for ev in extrair_eventos(payload("qual a garantia do Águias?", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        return orq, enviados
+
+    orq, enviados = asyncio.run(cenario())
+    assert enviados == [MENSAGEM_ESPERA]
+    assert orq.memoria.esta_pausado(LEAD)
+
+
+def test_resposta_manual_devolve_conversa_ao_agente_depois_da_pausa():
+    async def cenario():
+        _, orq, _ = montar(CerebroFalso(["Me dá um tempinho que eu te retorno aqui, tá?"], transferir=True))
+        for ev in extrair_eventos(payload("quero desconto", "m1"), CONTA):
+            orq.receber(ev)
+        await asyncio.sleep(0.2)
+        assert orq.memoria.lead(LEAD)["transferido"] == 1
+        for ev in extrair_eventos(payload("Oi Carla, sobre o desconto...", "m_ed", eco=True), CONTA):
+            orq.receber(ev)
+        return orq.memoria.lead(LEAD)
+
+    lead = asyncio.run(cenario())
+    assert lead["transferido"] == 0 and lead["pausado_ate"] > 0  # pausado agora, volta sozinho depois

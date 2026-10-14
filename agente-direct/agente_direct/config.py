@@ -40,6 +40,8 @@ class Config:
     banco: Path = field(default_factory=lambda: RAIZ / "dados" / "direct.sqlite3")
     pasta_conhecimento: Path = field(default_factory=lambda: RAIZ / "conhecimento")
     notificar_url: str = ""
+    telegram_token: str = ""     # bot do Telegram que te avisa quando alguém espera sua resposta
+    telegram_chat_id: str = ""
     admin_token: str = ""
     modo_teste: bool = False  # True: não envia nada ao Instagram, só registra no log
 
@@ -71,6 +73,8 @@ class Config:
             banco=Path(e("BANCO", str(RAIZ / "dados" / "direct.sqlite3"))),
             pasta_conhecimento=Path(e("PASTA_CONHECIMENTO", str(RAIZ / "conhecimento"))),
             notificar_url=e("NOTIFICAR_URL", ""),
+            telegram_token=e("TELEGRAM_TOKEN", ""),
+            telegram_chat_id=e("TELEGRAM_CHAT_ID", ""),
             admin_token=e("ADMIN_TOKEN", ""),
             modo_teste=e("MODO_TESTE", "0").lower() in ("1", "true", "sim"),
             max_msgs_sessao=int(e("MAX_MSGS_SESSAO", "15")),

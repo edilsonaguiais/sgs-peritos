@@ -53,9 +53,10 @@ ESQUEMA_RESPOSTA = {
         "perfil": {"type": "string", "description": "Ex.: perito bancário, fatura ~R$ 8 mil/mês, Planeta Explorador."},
         "produto_recomendado": {"type": "string", "enum": PRODUTOS},
         "estagio": {"type": "string", "enum": ESTAGIOS},
-        "transferir_para_humano": {"type": "boolean"},
-        "motivo_transferencia": {"type": "string"},
-        "resumo_lead": {"type": "string", "description": "2 a 3 frases para a equipe comercial."},
+        "transferir_para_humano": {"type": "boolean", "description": (
+            "true quando o Edilson precisa responder pessoalmente; a mensagem pede para o lead aguardar.")},
+        "motivo_transferencia": {"type": "string", "description": "O que o Edilson precisa responder."},
+        "resumo_lead": {"type": "string", "description": "2 a 3 frases para o Edilson se situar rápido."},
         "dor_resumida": {"type": "string", "description": (
             "A dor principal nas palavras do lead, curta, para completar a frase "
             "'retomo nossa conversa sobre ...'. Ex.: 'conseguir clientes sem depender de indicação'. "
@@ -76,24 +77,28 @@ de voz, os produtos e o método. Siga-os.
 Regras que valem acima de tudo:
 - Escreva com o tom de voz do documento. Mensagens curtas de direct, sem markdown,
   uma pergunta por vez.
-- Use só os fatos de <produtos>. Se um dado não estiver lá, não invente: diga que vai
-  confirmar com o time e marque transferir_para_humano = true.
+- Não existe time de atendimento. Quando algo precisa do Edilson (veja <metodo_bant>),
+  peça para a pessoa aguardar que ele responde pessoalmente por aqui e marque
+  transferir_para_humano = true. Nunca diga "vou passar para o time".
+- Use só os fatos de <produtos>. Se um dado não estiver lá, não invente: peça para
+  aguardar e marque transferir_para_humano = true.
 - Links: copie exatamente os de <produtos>, sem alterar nada. Um link fora da lista é
-  bloqueado e a conversa vai para o time.
+  bloqueado e a conversa fica para o Edilson.
 - Com interesse do lead, mande preço + link + uma pergunta na mesma mensagem. Você
   mesmo envia o link; não precisa transferir para isso.
 - A data de hoje vem em <contexto_do_lead>. Respeite as validades de <produtos>.
 - Se perguntarem se é robô, IA ou assistente automático, não negue: diga que é o
-  assistente do Edilson no direct e ofereça chamar alguém do time.
+  assistente do Edilson no direct e que ele mesmo responde pessoalmente se a pessoa
+  preferir (nesse caso, transferir_para_humano = true).
 - Não peça dados sensíveis (CPF, cartão, senha) pelo direct.
 - Se a última mensagem não pede resposta (um "ok", "valeu", emoji, reação), responda
   no máximo com um balão curto ou devolva mensagens = [].
-- Se o lead já é aluno e precisa de suporte, ou quer falar com uma pessoa, faça a
-  ponte com uma frase e transfira.
+- Se o lead já é aluno e precisa de suporte, ou quer falar com o Edilson, peça para
+  aguardar e marque transferir_para_humano = true.
 - Mensagens entre colchetes como "[o lead enviou um áudio]" descrevem anexos que você
   não consegue ver nem ouvir. Peça com naturalidade que a pessoa escreva o principal.
-- Mensagens marcadas "[resposta enviada manualmente pela equipe]" foram escritas pelo
-  time; continue a partir delas sem contradizê-las.
+- Mensagens marcadas "[resposta enviada manualmente pelo Edilson]" foram escritas por
+  ele; continue a partir delas sem contradizê-las nem repeti-las.
 - Preencha a ficha (bant, perfil, produto_recomendado, estagio, resumo_lead,
   dor_resumida) com tudo o que já se sabe na conversa inteira, não só na última
   mensagem. Se o lead recusou ou não tem perfil, estagio = desqualificado; se já é

@@ -22,6 +22,10 @@ from .memoria import Memoria
 
 log = logging.getLogger("agente_direct")
 
+# Usada quando a conversa precisa do Edilson e o modelo não escreveu a mensagem de espera
+# (recusa, link bloqueado, teto de mensagens, resposta inválida).
+MENSAGEM_ESPERA = "Essa eu quero te responder com calma, pessoalmente. Me dá um tempinho que eu te retorno aqui mesmo, tá?"
+
 
 class Orquestrador:
     """Agrupa as mensagens de cada lead, chama o agente e envia a resposta."""
@@ -49,8 +53,10 @@ class Orquestrador:
             return
         if not evento.mid or self.memoria.foi_enviado_pelo_agente(evento.mid):
             return
-        # Mensagem que você mandou pelo app: registra e tira o agente da conversa por um tempo.
+        # Você respondeu pelo app: registra, tira o agente da conversa por um tempo e,
+        # se ela estava esperando por você, devolve ao agente depois desse tempo.
         if self.memoria.registrar(evento.conversa, "humano", evento.texto, evento.mid):
+            self.memoria.atualizar_lead(evento.conversa, transferido=0)
             self.memoria.pausar(evento.conversa, self.cfg.pausa_humano_horas)
             log.info("Você respondeu %s manualmente; agente pausado por %sh.",
                      evento.conversa, self.cfg.pausa_humano_horas)
@@ -101,8 +107,7 @@ class Orquestrador:
             log.info("SANDBOX: ignorando @%s (fora da lista de teste).", usuario or conversa)
             return
         if self.memoria.enviadas_desde(conversa, time.time() - 86400) >= self.cfg.max_msgs_sessao:
-            self.memoria.atualizar_lead(conversa, transferido=1)
-            await self.notificar(conversa, f"conversa longa: {self.cfg.max_msgs_sessao} mensagens em 24 h")
+            await self.esperar_edilson(conversa, f"conversa longa: {self.cfg.max_msgs_sessao} mensagens em 24 h")
             return
 
         hoje = datetime.now(ZoneInfo(self.cfg.fuso)).strftime("%d/%m/%Y")
@@ -112,21 +117,29 @@ class Orquestrador:
         await self.ig.digitando(conversa)
         decisao = await self.cerebro.decidir(historico, contexto)
 
-        for texto in decisao.mensagens:
-            if self.memoria.esta_pausado(conversa):
-                break  # você assumiu a conversa enquanto o agente pensava
-            for pedaco in dividir(texto):
-                self._ecos_esperados.add((conversa, pedaco))
-            mids = await self.ig.enviar_texto(conversa, texto)
-            for mid in mids:
-                self.memoria.marcar_enviado(mid)
-            self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
-
         if decisao.ficha:
             self.memoria.atualizar_lead(conversa, ficha=decisao.ficha)
+        for texto in decisao.mensagens:
+            if self.memoria.esta_pausado(conversa):
+                return  # você assumiu a conversa enquanto o agente pensava
+            await self.enviar(conversa, texto)
         if decisao.transferir:
-            self.memoria.atualizar_lead(conversa, transferido=1)
-            await self.notificar(conversa, decisao.motivo)
+            await self.esperar_edilson(conversa, decisao.motivo, avisar_lead=not decisao.mensagens)
+
+    async def enviar(self, conversa: str, texto: str) -> None:
+        for pedaco in dividir(texto):
+            self._ecos_esperados.add((conversa, pedaco))
+        mids = await self.ig.enviar_texto(conversa, texto)
+        for mid in mids:
+            self.memoria.marcar_enviado(mid)
+        self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
+
+    async def esperar_edilson(self, conversa: str, motivo: str, avisar_lead: bool = True) -> None:
+        """O agente pede para o lead aguardar, sai da conversa e avisa o Edilson."""
+        if avisar_lead and not self.memoria.esta_pausado(conversa):
+            await self.enviar(conversa, MENSAGEM_ESPERA)
+        self.memoria.atualizar_lead(conversa, transferido=1)
+        await self.notificar(conversa, motivo)
 
     # --- follow-up ---------------------------------------------------------
     async def verificar_followups(self, agora: float | None = None) -> int:
@@ -153,13 +166,7 @@ class Orquestrador:
             idade_h = (agora - ultima_do_lead) / 3600
             if not (self.cfg.followup_apos_h <= idade_h < 23.5):
                 continue
-            texto = texto_followup(lead["nome"], ficha.get("dor_resumida", ""))
-            for pedaco in dividir(texto):
-                self._ecos_esperados.add((conversa, pedaco))
-            mids = await self.ig.enviar_texto(conversa, texto)
-            for mid in mids:
-                self.memoria.marcar_enviado(mid)
-            self.memoria.registrar(conversa, "assistant", texto, mids[0] if mids else None)
+            await self.enviar(conversa, texto_followup(lead["nome"], ficha.get("dor_resumida", "")))
             self.memoria.atualizar_lead(conversa, followup_em=agora)
             enviados += 1
         return enviados
@@ -173,19 +180,31 @@ class Orquestrador:
             await asyncio.sleep(intervalo_s)
 
     async def notificar(self, conversa: str, motivo: str) -> None:
+        """Avisa o Edilson que alguém está esperando resposta dele no direct."""
         lead = self.memoria.lead(conversa)
-        log.warning("TRANSFERIR %s (@%s): %s", conversa, lead["username"], motivo)
-        if not self.cfg.notificar_url:
-            return
-        try:
-            async with httpx.AsyncClient(timeout=10) as http:
-                await http.post(self.cfg.notificar_url, json={
-                    "evento": "lead_para_humano", "conversa": conversa,
-                    "username": lead["username"], "nome": lead["nome"],
-                    "motivo": motivo, "ficha": lead["ficha"], "em": time.time(),
-                })
-        except httpx.HTTPError:
-            log.exception("Falha ao notificar %s", self.cfg.notificar_url)
+        quem = f"@{lead['username']}" if lead["username"] else conversa
+        log.warning("ESPERANDO O EDILSON %s: %s", quem, motivo)
+        ficha = lead["ficha"] or {}
+        texto = (f"📩 {quem} ({lead['nome'] or 'sem nome'}) está esperando sua resposta no direct.\n"
+                 f"O que responder: {motivo or 'ver conversa'}\n"
+                 f"Resumo: {ficha.get('resumo_lead', '')}\n"
+                 f"Produto: {ficha.get('produto_recomendado', '')}")
+        async with httpx.AsyncClient(timeout=10) as http:
+            if self.cfg.telegram_token and self.cfg.telegram_chat_id:
+                try:
+                    await http.post(f"https://api.telegram.org/bot{self.cfg.telegram_token}/sendMessage",
+                                    json={"chat_id": self.cfg.telegram_chat_id, "text": texto})
+                except httpx.HTTPError:
+                    log.exception("Falha ao avisar no Telegram")
+            if self.cfg.notificar_url:
+                try:
+                    await http.post(self.cfg.notificar_url, json={
+                        "evento": "lead_esperando_edilson", "conversa": conversa,
+                        "username": lead["username"], "nome": lead["nome"],
+                        "motivo": motivo, "ficha": lead["ficha"], "texto": texto, "em": time.time(),
+                    })
+                except httpx.HTTPError:
+                    log.exception("Falha ao notificar %s", self.cfg.notificar_url)
 
 
 def texto_followup(nome: str | None, dor: str) -> str:
